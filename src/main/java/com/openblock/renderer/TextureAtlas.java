@@ -17,12 +17,14 @@ import static org.lwjgl.stb.STBImage.stbi_image_free;
 /**
  * A 256x16 programmatic atlas (16 tiles of 16x16 px each, laid out in one row).
  * Tile indices:
- *   0 = grass top   (green)
- *   1 = grass side  (green top half, brown bottom)
- *   2 = dirt        (brown)
- *   3 = stone       (gray)
- *   4 = sand        (tan)
- *   5 = bedrock     (dark gray)
+ *   0 = grass top        (green)
+ *   1 = grass side       (green top half, brown bottom)
+ *   2 = dirt             (brown)
+ *   3 = cobblestone      (stone visual)
+ *   4 = sand             (tan)
+ *   5 = bedrock          (dark gray)
+ *   6 = snow grass side  (snow-capped side)
+ *   7 = snow top         (white)
  */
 public class TextureAtlas {
     public static final int TILE_SIZE   = 16;
@@ -50,6 +52,13 @@ public class TextureAtlas {
         for (Face f : Face.values()) set(BlockType.STONE,   f, 3);
         for (Face f : Face.values()) set(BlockType.SAND,    f, 4);
         for (Face f : Face.values()) set(BlockType.BEDROCK, f, 5);
+
+        set(BlockType.SNOW_GRASS, Face.TOP,    7);
+        set(BlockType.SNOW_GRASS, Face.BOTTOM, 2);
+        set(BlockType.SNOW_GRASS, Face.NORTH,  6);
+        set(BlockType.SNOW_GRASS, Face.SOUTH,  6);
+        set(BlockType.SNOW_GRASS, Face.EAST,   6);
+        set(BlockType.SNOW_GRASS, Face.WEST,   6);
     }
 
     private static void set(BlockType bt, Face f, int col) {
@@ -102,11 +111,18 @@ public class TextureAtlas {
         if (!blitResource(buf, 2, "/textures/dirt.png"))
             fillTile(buf, 2, 0x8B, 0x45, 0x13, 0xFF);
 
-        // Tiles 3-5: procedural
-        fillTileStone(buf, 3);
-        fillTile(buf, 4, 0xF2, 0xD1, 0x6E, 0xFF);
-        fillTileBedrock(buf, 5);
-        for (int i = 6; i < TILE_COUNT; i++)
+        // Tiles 3-5: real textures (fall back to procedural if missing)
+        if (!blitResource(buf, 3, "/textures/cobblestone.png"))
+            fillTileStone(buf, 3);
+        if (!blitResource(buf, 4, "/textures/sand.png"))
+            fillTile(buf, 4, 0xF2, 0xD1, 0x6E, 0xFF);
+        if (!blitResource(buf, 5, "/textures/bedrock.png"))
+            fillTileBedrock(buf, 5);
+        // Tile 6: snow grass side, tile 7: snow top
+        if (!blitResource(buf, 6, "/textures/grass_block_snow.png"))
+            fillTileGrassSide(buf, 6); // fallback
+        fillTileSnowTop(buf, 7);
+        for (int i = 8; i < TILE_COUNT; i++)
             fillTile(buf, i, 0xFF, 0x00, 0xFF, 0xFF);
 
         buf.flip();
@@ -203,6 +219,23 @@ public class TextureAtlas {
                 buf.put(idx,     (byte) v);
                 buf.put(idx + 1, (byte) v);
                 buf.put(idx + 2, (byte) v);
+                buf.put(idx + 3, (byte) 0xFF);
+            }
+        }
+    }
+
+    private static void fillTileSnowTop(ByteBuffer buf, int col) {
+        int xStart = col * TILE_SIZE;
+        for (int py = 0; py < TILE_SIZE; py++) {
+            for (int px = xStart; px < xStart + TILE_SIZE; px++) {
+                int lx = px - xStart;
+                // slight blue-white variation for snow texture
+                boolean speckle = ((lx * 3 + py * 7) % 9 == 0);
+                int v = speckle ? 0xE0 : 0xF8;
+                int idx = (py * ATLAS_W + px) * 4;
+                buf.put(idx,     (byte) v);
+                buf.put(idx + 1, (byte) v);
+                buf.put(idx + 2, (byte) 0xFF);
                 buf.put(idx + 3, (byte) 0xFF);
             }
         }

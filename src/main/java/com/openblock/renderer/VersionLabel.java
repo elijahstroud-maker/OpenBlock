@@ -14,7 +14,7 @@ import static org.lwjgl.opengl.GL11.*;
  * rendered to a texture via Java AWT.
  */
 public class VersionLabel {
-    public static final String VERSION = "Pre-Alpha 0.1";
+    public static final String VERSION = "Pre-Alpha 0.2";
 
     private static final int   FONT_SIZE    = 11;
     private static final int   SCALE        = 2;   // nearest-neighbour 2x upscale → chunky look

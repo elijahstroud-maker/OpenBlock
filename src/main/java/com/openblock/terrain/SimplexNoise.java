@@ -79,6 +79,34 @@ public class SimplexNoise {
         return 70.0 * (n0 + n1 + n2);
     }
 
+    /**
+     * Fractional Brownian Motion: sums {@code octaves} layers of noise.
+     * @param freq  base frequency
+     * @param gain  amplitude multiplier per octave (lacunarity fixed at 2.0)
+     */
+    public double octaves(double x, double z, int octaves, double freq, double gain) {
+        double sum = 0, amp = 1, maxAmp = 0;
+        for (int i = 0; i < octaves; i++) {
+            sum   += noise(x * freq, z * freq) * amp;
+            maxAmp += amp;
+            amp   *= gain;
+            freq  *= 2.0;
+        }
+        return sum / maxAmp; // normalised to [-1, 1]
+    }
+
+    /** Ridged noise: 1 - |octaves(...)| mapped to [0,1]. Good for mountain ridges. */
+    public double ridged(double x, double z, int octaves, double freq, double gain) {
+        double sum = 0, amp = 1, maxAmp = 0;
+        for (int i = 0; i < octaves; i++) {
+            sum   += (1.0 - Math.abs(noise(x * freq, z * freq))) * amp;
+            maxAmp += amp;
+            amp   *= gain;
+            freq  *= 2.0;
+        }
+        return sum / maxAmp; // [0, 1]
+    }
+
     private static int fastFloor(double x) {
         int xi = (int) x;
         return x < xi ? xi - 1 : xi;

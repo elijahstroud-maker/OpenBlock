@@ -25,7 +25,7 @@ public class World {
     private final Set<Long> inFlight = ConcurrentHashMap.newKeySet();
 
     public World() {
-        generator = new TerrainGenerator(12345L);
+        generator = new TerrainGenerator(new java.util.Random().nextLong());
         atlas     = new TextureAtlas();
         mesher    = new ChunkMesher();
         genPool   = Executors.newFixedThreadPool(

@@ -1,12 +1,13 @@
 package com.openblock.world;
 
 public enum BlockType {
-    AIR     (false),
-    GRASS   (true),
-    DIRT    (true),
-    STONE   (true),
-    SAND    (true),
-    BEDROCK (true);
+    AIR        (false),
+    GRASS      (true),
+    DIRT       (true),
+    STONE      (true),
+    SAND       (true),
+    BEDROCK    (true),
+    SNOW_GRASS (true);
 
     public final boolean solid;
 

@@ -59,6 +59,22 @@ public class TextureAtlas {
         set(BlockType.SNOW_GRASS, Face.SOUTH,  6);
         set(BlockType.SNOW_GRASS, Face.EAST,   6);
         set(BlockType.SNOW_GRASS, Face.WEST,   6);
+
+        set(BlockType.LOG, Face.TOP,    9);
+        set(BlockType.LOG, Face.BOTTOM, 9);
+        set(BlockType.LOG, Face.NORTH,  8);
+        set(BlockType.LOG, Face.SOUTH,  8);
+        set(BlockType.LOG, Face.EAST,   8);
+        set(BlockType.LOG, Face.WEST,   8);
+
+        for (Face f : Face.values()) set(BlockType.LEAVES, f, 10);
+
+        set(BlockType.CACTUS, Face.TOP,    12);
+        set(BlockType.CACTUS, Face.BOTTOM, 13);
+        set(BlockType.CACTUS, Face.NORTH,  11);
+        set(BlockType.CACTUS, Face.SOUTH,  11);
+        set(BlockType.CACTUS, Face.EAST,   11);
+        set(BlockType.CACTUS, Face.WEST,   11);
     }
 
     private static void set(BlockType bt, Face f, int col) {
@@ -122,7 +138,26 @@ public class TextureAtlas {
         if (!blitResource(buf, 6, "/textures/grass_block_snow.png"))
             fillTileGrassSide(buf, 6); // fallback
         fillTileSnowTop(buf, 7);
-        for (int i = 8; i < TILE_COUNT; i++)
+        // Tile 8: log side, tile 9: log top, tile 10: leaves
+        if (!blitResource(buf, 8, "/textures/log.png"))
+            fillTile(buf, 8, 0x6B, 0x43, 0x1D, 0xFF);
+        if (!blitResource(buf, 9, "/textures/log_top.png"))
+            fillTile(buf, 9, 0x5C, 0x39, 0x17, 0xFF);
+        if (!blitResource(buf, 10, "/textures/leaves.png"))
+            fillTile(buf, 10, 0x2D, 0x6A, 0x0F, 0xCC);
+        // Tile 11: cactus side, tile 12: cactus top, tile 13: cactus bottom
+        // Cactus PNGs are designed for an inset model and have transparent corners.
+        // Force alpha=255 after blitting so the full block face stays opaque.
+        if (!blitResource(buf, 11, "/textures/cactus_side.png"))
+            fillTile(buf, 11, 0x4A, 0x7C, 0x1E, 0xFF);
+        forceTileOpaque(buf, 11);
+        if (!blitResource(buf, 12, "/textures/cactus_top.png"))
+            fillTile(buf, 12, 0x3D, 0x6B, 0x18, 0xFF);
+        forceTileOpaque(buf, 12);
+        if (!blitResource(buf, 13, "/textures/cactus_bottom.png"))
+            fillTile(buf, 13, 0x3D, 0x6B, 0x18, 0xFF);
+        forceTileOpaque(buf, 13);
+        for (int i = 14; i < TILE_COUNT; i++)
             fillTile(buf, i, 0xFF, 0x00, 0xFF, 0xFF);
 
         buf.flip();
@@ -171,6 +206,16 @@ public class TextureAtlas {
 
         stbi_image_free(pixels);
         return true;
+    }
+
+    /** Sets alpha=255 for every pixel in the tile, leaving RGB untouched. */
+    private static void forceTileOpaque(ByteBuffer buf, int col) {
+        int xStart = col * TILE_SIZE;
+        for (int py = 0; py < TILE_SIZE; py++) {
+            for (int px = xStart; px < xStart + TILE_SIZE; px++) {
+                buf.put((py * ATLAS_W + px) * 4 + 3, (byte) 0xFF);
+            }
+        }
     }
 
     private static void fillTile(ByteBuffer buf, int col, int r, int g, int b, int a) {

@@ -77,7 +77,7 @@ public class ChunkMesher {
                         int ny = ly + off[1];
                         int nz = chunk.getWorldZ() + lz + off[2];
 
-                        if (world.getBlock(nx, ny, nz) != BlockType.AIR) continue;
+                        if (world.getBlock(nx, ny, nz).opaque) continue;
 
                         float[] uv = atlas.getUV(block, FACES[fi]);
                         float u0 = uv[0], v0 = uv[1], u1 = uv[2], v1 = uv[3];

@@ -1,4 +1,4 @@
 target/
 .claude/
-sounds/
+sounds/ffmpeg*/
 .vscode/

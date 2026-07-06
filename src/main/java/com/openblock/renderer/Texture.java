@@ -56,14 +56,26 @@ public class Texture {
         textureId = glGenTextures();
         glBindTexture(GL_TEXTURE_2D, textureId);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-        glGenerateMipmap(GL_TEXTURE_2D);
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
+        // No mipmaps for atlas: at lower mip levels the 272x16 strip collapses and tiles bleed together
+        // (no glGenerateMipmap call — GL_NEAREST doesn't use them)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
         glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    /** Uploads a tileSize×tileSize RGBA region at (tileCol*tileSize, 0) from a flat byte array. */
+    public void updateTile(int tileCol, int tileSize, byte[] frameData, int frameIndex) {
+        int frameBytes = tileSize * tileSize * 4;
+        ByteBuffer tmp = MemoryUtil.memAlloc(frameBytes);
+        tmp.put(frameData, frameIndex * frameBytes, frameBytes).flip();
+        glBindTexture(GL_TEXTURE_2D, textureId);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, tileCol * tileSize, 0, tileSize, tileSize,
+                        GL_RGBA, GL_UNSIGNED_BYTE, tmp);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        MemoryUtil.memFree(tmp);
     }
 
     public void bind(int unit) {

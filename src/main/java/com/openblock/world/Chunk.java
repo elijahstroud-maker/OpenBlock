@@ -20,7 +20,15 @@ public class Chunk {
     /** Set to true when block data changed and mesh needs rebuilding. */
     public volatile boolean dirty = false;
 
+    /**
+     * Highest non-air block ever written (conservative — never lowered when blocks
+     * are removed). Lets the mesher and frustum culling skip the empty sky above
+     * the terrain instead of scanning all 256 layers.
+     */
+    private int maxNonAirY = 0;
+
     private Mesh mesh;
+    private Mesh waterMesh;
 
     public Chunk(int chunkX, int chunkZ) {
         this.chunkX = chunkX;
@@ -34,8 +42,11 @@ public class Chunk {
 
     public void setBlock(int lx, int ly, int lz, BlockType type) {
         blocks[index(lx, ly, lz)] = (byte) type.ordinal();
+        if (type != BlockType.AIR && ly > maxNonAirY) maxNonAirY = ly;
         dirty = true;
     }
+
+    public int getMaxNonAirY() { return maxNonAirY; }
 
     private static int index(int lx, int ly, int lz) {
         return (lx * SIZE_Y * SIZE_Z) + (ly * SIZE_Z) + lz;
@@ -47,21 +58,23 @@ public class Chunk {
     public int getWorldX() { return chunkX * SIZE_X; }
     public int getWorldZ() { return chunkZ * SIZE_Z; }
 
-    public Mesh getMesh() { return mesh; }
+    public Mesh getMesh()      { return mesh; }
+    public Mesh getWaterMesh() { return waterMesh; }
 
     /** Called on main thread only (OpenGL requirement). */
     public void uploadMesh(float[] vertices, int[] indices) {
-        if (mesh == null) {
-            mesh = new Mesh();
-        }
+        if (mesh == null) mesh = new Mesh();
         mesh.upload(vertices, indices);
         dirty = false;
     }
 
+    public void uploadWaterMesh(float[] vertices, int[] indices) {
+        if (waterMesh == null) waterMesh = new Mesh();
+        waterMesh.upload(vertices, indices);
+    }
+
     public void cleanup() {
-        if (mesh != null) {
-            mesh.cleanup();
-            mesh = null;
-        }
+        if (mesh != null)      { mesh.cleanup();      mesh      = null; }
+        if (waterMesh != null) { waterMesh.cleanup(); waterMesh = null; }
     }
 }

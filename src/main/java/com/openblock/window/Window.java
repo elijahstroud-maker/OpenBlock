@@ -26,7 +26,7 @@ public class Window {
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
-        // Fullscreen on primary monitor at its native resolution
+        // Fullscreen at the monitor's native resolution
         long monitor = glfwGetPrimaryMonitor();
         GLFWVidMode vidMode = glfwGetVideoMode(monitor);
         this.width  = vidMode != null ? vidMode.width()  : width;

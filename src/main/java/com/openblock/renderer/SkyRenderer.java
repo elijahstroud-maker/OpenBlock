@@ -141,10 +141,10 @@ public class SkyRenderer {
                        1.0f, 0.95f, 0.70f, 1.0f);
         }
 
-        // Moon
+        // Moon — body is fully opaque so stars never show through it
         if (moonAlpha > 0.01f) {
             renderBody(camPos, dayNight.getMoonDirection(),
-                       0.90f, 0.90f, 0.95f, moonAlpha);
+                       0.90f, 0.90f, 0.95f, Math.min(1.0f, moonAlpha * 1.4f));
         }
 
         shader.detach();

@@ -1,5 +1,8 @@
 package com.openblock;
 
+import com.openblock.audio.AudioEngine;
+import com.openblock.audio.MusicPlayer;
+import com.openblock.audio.SoundManager;
 import com.openblock.input.InputHandler;
 import com.openblock.player.Player;
 import com.openblock.renderer.DayNightCycle;
@@ -14,8 +17,9 @@ import static org.lwjgl.opengl.GL11.*;
 
 public class Game {
     private static final double TICK_RATE = 1.0 / 60.0;
-    /** Show loading screen until at least this many chunk meshes are ready. */
-    private static final int MIN_CHUNKS_TO_START = 289; // full 17×17 render distance
+    /** Show loading screen until every chunk in the render-distance square is meshed. */
+    private static final int MIN_CHUNKS_TO_START =
+        (2 * World.RENDER_DISTANCE + 1) * (2 * World.RENDER_DISTANCE + 1);
 
     private Window window;
     private InputHandler input;
@@ -24,6 +28,9 @@ public class Game {
     private World world;
     private Player player;
     private DayNightCycle dayNight;
+    private AudioEngine audio;
+    private MusicPlayer music;
+    private SoundManager sounds;
     private boolean loading = true;
 
     public void run() {
@@ -46,10 +53,20 @@ public class Game {
         loadingScreen = new LoadingScreen();
         dayNight = new DayNightCycle();
 
+        audio = new AudioEngine();
+        audio.init();
+
+        sounds = new SoundManager();
+        sounds.init();
+
+        music = new MusicPlayer();
+        music.init();
+
         world = new World();
-        player = new Player(world, input);
-        // Spawn player above terrain (terrain gen will put surface ~64-112 so start high)
-        player.getCamera().getPosition().set(8.0f, 120.0f, 8.0f);
+        player = new Player(world, input, sounds);
+        // Find safe grassy spawn near origin, like Minecraft
+        float[] spawn = world.findSafeSpawn();
+        player.getCamera().getPosition().set(spawn[0], spawn[1], spawn[2]);
     }
 
     private void loop() {
@@ -84,8 +101,12 @@ public class Game {
         if (!loading) {
             player.update(delta);
             dayNight.update(delta);
+
+            if (input.isMouseButtonJustPressed(GLFW_MOUSE_BUTTON_LEFT)) {
+                player.tryBreakBlock();
+            }
         }
-        world.update(player.getChunkX(), player.getChunkZ());
+        world.update(player.getChunkX(), player.getChunkZ(), delta);
 
         if (loading && world.getLoadedMeshCount() >= MIN_CHUNKS_TO_START) {
             loading = false;
@@ -96,6 +117,7 @@ public class Game {
                 player.getCamera().getPosition().x,
                 player.getCamera().getPosition().z);
             renderer.updateHotbar(input);
+            music.update(delta, dayNight.isSunUp());
         }
     }
 
@@ -111,10 +133,15 @@ public class Game {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             loadingScreen.render(window.width, window.height);
         } else {
-            Vector3f sky = dayNight.getSkyColor();
-            glClearColor(sky.x, sky.y, sky.z, 1.0f);
+            if (renderer.isUnderwater()) {
+                glClearColor(0.02f, 0.10f, 0.22f, 1.0f);
+            } else {
+                Vector3f sky = dayNight.getSkyColor();
+                glClearColor(sky.x, sky.y, sky.z, 1.0f);
+            }
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            renderer.render(world, player.getCamera(), dayNight, window.width, window.height);
+            renderer.render(world, player.getCamera(), dayNight, window.width, window.height,
+                            player.getTargetBlock());
         }
     }
 
@@ -122,6 +149,9 @@ public class Game {
         loadingScreen.cleanup();
         renderer.cleanup();
         world.cleanup();
+        if (music  != null) music.cleanup();
+        if (sounds != null) sounds.cleanup();
+        if (audio  != null) audio.cleanup();
         window.destroy();
     }
 }

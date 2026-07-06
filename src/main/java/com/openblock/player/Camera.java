@@ -15,6 +15,9 @@ public class Camera {
 
     private final Matrix4f viewMatrix = new Matrix4f();
     private final Vector3f tmpTarget  = new Vector3f();
+    private final Vector3f tmpEye     = new Vector3f();
+    /** Render-only vertical eye offset for swim view-bob (never affects physics). */
+    private float bobOffsetY = 0f;
 
     public Camera() {
         updateVectors();
@@ -41,9 +44,15 @@ public class Camera {
     }
 
     public Matrix4f getViewMatrix() {
-        position.add(front, tmpTarget);
-        return viewMatrix.identity().lookAt(position, tmpTarget, up);
+        // Apply the view-bob as a render-only eye offset so it never feeds back
+        // into physics/collision (which read position directly).
+        position.add(0f, bobOffsetY, 0f, tmpEye);
+        tmpEye.add(front, tmpTarget);
+        return viewMatrix.identity().lookAt(tmpEye, tmpTarget, up);
     }
+
+    /** Render-only vertical eye offset for swim view-bob. */
+    public void setBobOffset(float y) { this.bobOffsetY = y; }
 
     public Vector3f getPosition() { return position; }
     public Vector3f getFront()    { return front; }

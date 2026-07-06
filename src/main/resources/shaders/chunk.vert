@@ -7,13 +7,14 @@ layout(location = 2) in float aLight;
 out vec2 vTexCoord;
 out float vLight;
 out float vFogFactor;
+out vec3 vWorldPos;
 
 uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
 
-const float FOG_START = 160.0;
-const float FOG_END   = 260.0;
+uniform float uFogStart;
+uniform float uFogEnd;
 
 void main() {
     vec4 worldPos = uModel * vec4(aPosition, 1.0);
@@ -22,7 +23,8 @@ void main() {
 
     vTexCoord = aTexCoord;
     vLight    = aLight;
+    vWorldPos = worldPos.xyz;
 
     float dist = length(viewPos.xyz);
-    vFogFactor = clamp((FOG_END - dist) / (FOG_END - FOG_START), 0.0, 1.0);
+    vFogFactor = clamp((uFogEnd - dist) / (uFogEnd - uFogStart), 0.0, 1.0);
 }

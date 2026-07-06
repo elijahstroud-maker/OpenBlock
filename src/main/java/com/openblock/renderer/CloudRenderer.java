@@ -147,7 +147,7 @@ public class CloudRenderer {
     }
 
     public void render(Matrix4f projection, Matrix4f view,
-                       org.joml.Vector3f fogColor, float ambient) {
+                       org.joml.Vector3f fogColor, float ambient, float fogStart, float fogEnd) {
         if (mesh == null || mesh.isEmpty()) return;
 
         // Shift entire mesh by scroll delta — this is what makes clouds visually move
@@ -162,6 +162,8 @@ public class CloudRenderer {
         shader.setUniform("uModel", model);
         shader.setUniform("uTexture", 0);
         shader.setUniform("uFogColor", fogColor);
+        shader.setUniform("uFogStart", fogStart);
+        shader.setUniform("uFogEnd",   fogEnd);
         shader.setUniform("uAmbient", ambient);
         whiteTexture.bind(0);
         mesh.render();

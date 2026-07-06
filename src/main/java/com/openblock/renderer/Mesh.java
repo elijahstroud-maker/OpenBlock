@@ -39,11 +39,13 @@ public class Mesh {
 
             glBindVertexArray(vaoId);
 
+            // STATIC_DRAW: meshes are drawn for many frames per upload; rebuilds
+            // replace the whole buffer anyway, so the static hint is the right one.
             glBindBuffer(GL_ARRAY_BUFFER, vboId);
-            glBufferData(GL_ARRAY_BUFFER, vb, GL_DYNAMIC_DRAW);
+            glBufferData(GL_ARRAY_BUFFER, vb, GL_STATIC_DRAW);
 
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, eboId);
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, ib, GL_DYNAMIC_DRAW);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, ib, GL_STATIC_DRAW);
 
             // position: attribute 0, 3 floats
             glVertexAttribPointer(0, 3, GL_FLOAT, false, STRIDE, 0L);

@@ -17,6 +17,11 @@ public class InputHandler {
     /** Accumulated scroll delta (positive = scroll up). */
     public float scrollDY = 0;
 
+    /** True while the button is held. Index = GLFW_MOUSE_BUTTON_*. */
+    private final boolean[] mouseDown    = new boolean[8];
+    /** True for exactly one tick after the button transitions to pressed. */
+    private final boolean[] mouseClicked = new boolean[8];
+
     public InputHandler(long window) {
         this.window = window;
 
@@ -24,6 +29,17 @@ public class InputHandler {
             if (key >= 0 && key <= GLFW_KEY_LAST) {
                 if (action == GLFW_PRESS)   keys[key] = true;
                 if (action == GLFW_RELEASE) keys[key] = false;
+            }
+        });
+
+        glfwSetMouseButtonCallback(window, (win, button, action, mods) -> {
+            if (button >= 0 && button < mouseDown.length) {
+                if (action == GLFW_PRESS) {
+                    if (!mouseDown[button]) mouseClicked[button] = true;
+                    mouseDown[button] = true;
+                } else if (action == GLFW_RELEASE) {
+                    mouseDown[button] = false;
+                }
             }
         });
 
@@ -66,5 +82,18 @@ public class InputHandler {
     public boolean isKeyDown(int key) {
         if (key < 0 || key > GLFW_KEY_LAST) return false;
         return keys[key];
+    }
+
+    /** True if the button was just pressed this tick (one-shot, cleared after reading). */
+    public boolean isMouseButtonJustPressed(int button) {
+        if (button < 0 || button >= mouseDown.length) return false;
+        boolean v = mouseClicked[button];
+        mouseClicked[button] = false;
+        return v;
+    }
+
+    public boolean isMouseButtonDown(int button) {
+        if (button < 0 || button >= mouseDown.length) return false;
+        return mouseDown[button];
     }
 }

@@ -19,7 +19,7 @@ import static org.lwjgl.stb.STBImage.stbi_image_free;
  *   0 = grass top        (green)
  *   1 = grass side       (green top half, brown bottom)
  *   2 = dirt             (brown)
- *   3 = cobblestone      (stone visual)
+ *   3 = stone            (stone visual; cobblestone becomes the mined drop later)
  *   4 = sand             (tan)
  *   5 = bedrock          (dark gray)
  *   6 = snow grass side  (snow-capped side)
@@ -27,8 +27,8 @@ import static org.lwjgl.stb.STBImage.stbi_image_free;
  */
 public class TextureAtlas {
     public static final int TILE_SIZE   = 16;
-    public static final int TILE_COUNT  = 18; // tiles in one row
-    public static final int ATLAS_W     = TILE_SIZE * TILE_COUNT; // 288
+    public static final int TILE_COUNT  = 19; // tiles in one row
+    public static final int ATLAS_W     = TILE_SIZE * TILE_COUNT; // 304
     public static final int ATLAS_H     = TILE_SIZE;               // 16
 
     private final Texture texture;
@@ -97,6 +97,7 @@ public class TextureAtlas {
         set(BlockType.WATER_FLOWING, Face.EAST,   16);
         set(BlockType.WATER_FLOWING, Face.WEST,   16);
         for (Face f : Face.values()) set(BlockType.GRAVEL, f, 15);
+        for (Face f : Face.values()) set(BlockType.COBBLESTONE, f, 17);
     }
 
     private static void set(BlockType bt, Face f, int col) {
@@ -172,8 +173,10 @@ public class TextureAtlas {
         if (!blitResource(buf, 2, "/textures/dirt.png"))
             fillTile(buf, 2, 0x8B, 0x45, 0x13, 0xFF);
 
-        // Tiles 3-5: real textures (fall back to procedural if missing)
-        if (!blitResource(buf, 3, "/textures/cobblestone.png"))
+        // Tiles 3-5: real textures (fall back to procedural if missing).
+        // Stone uses the real stone texture now — cobblestone.png stays on the
+        // classpath for the mined-stone drop when block drops arrive.
+        if (!blitResource(buf, 3, "/textures/stone.png"))
             fillTileStone(buf, 3);
         if (!blitResource(buf, 4, "/textures/sand.png"))
             fillTile(buf, 4, 0xF2, 0xD1, 0x6E, 0xFF);
@@ -217,8 +220,11 @@ public class TextureAtlas {
         else
             tintTile(buf, 16, 0x3F, 0x76, 0xE4);
         setTileAlpha(buf, 16, 0xB4);
-        // Tile 17: magenta fallback
-        fillTile(buf, 17, 0xFF, 0x00, 0xFF, 0xFF);
+        // Tile 17: cobblestone (the mined-stone drop)
+        if (!blitResource(buf, 17, "/textures/cobblestone.png"))
+            fillTileStone(buf, 17);
+        // Tile 18: magenta fallback
+        fillTile(buf, 18, 0xFF, 0x00, 0xFF, 0xFF);
 
         buf.flip();
         return buf;

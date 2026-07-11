@@ -23,6 +23,11 @@ public class DayNightCycle {
         if (time >= 1.0f) time -= 1.0f;
     }
 
+    /** Jumps the clock (/time command): 0.0 = midnight, 0.5 = noon. */
+    public void setTime(float t) {
+        time = ((t % 1.0f) + 1.0f) % 1.0f;
+    }
+
     /** Returns the sky/fog color for the current time. */
     public Vector3f getSkyColor() {
         // Blend through: night(0) → sunrise(0.25) → day(0.4) → sunset(0.75) → night(1.0)

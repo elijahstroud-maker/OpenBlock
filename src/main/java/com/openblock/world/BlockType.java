@@ -13,7 +13,8 @@ public enum BlockType {
     CACTUS     (true,  true),
     WATER         (false, false),  // not solid, not opaque — player passes through, faces visible
     WATER_FLOWING (false, false),  // same as WATER but rendered at 7/8 height (visual flow indicator)
-    GRAVEL        (true,  true);
+    GRAVEL        (true,  true),
+    COBBLESTONE   (true,  true);   // dropped by mined stone; appended so ordinals stay stable
 
     public final boolean solid;
     /** Opaque blocks hide adjacent faces; non-opaque (AIR, LEAVES) let faces show. */

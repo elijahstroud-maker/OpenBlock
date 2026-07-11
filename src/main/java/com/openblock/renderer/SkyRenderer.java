@@ -113,8 +113,11 @@ public class SkyRenderer {
      * @param view       camera view matrix
      * @param camPos     camera world position (for billboard placement)
      * @param dayNight   provides sun/moon directions and colours
+     * @param clearness  1 = clear sky, 0 = full storm cover (fades every body out)
      */
-    public void render(Matrix4f projection, Matrix4f view, Vector3f camPos, DayNightCycle dayNight) {
+    public void render(Matrix4f projection, Matrix4f view, Vector3f camPos,
+                       DayNightCycle dayNight, float clearness) {
+        if (clearness <= 0.02f) return; // fully overcast — nothing to see
         glDisable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -124,7 +127,7 @@ public class SkyRenderer {
         shader.setUniform("uView", view);
         shader.setUniform("uTexture", 0);
 
-        float moonAlpha = Math.max(0.0f, 1.0f - dayNight.getAmbient() * 1.5f);
+        float moonAlpha = Math.max(0.0f, 1.0f - dayNight.getAmbient() * 1.5f) * clearness;
 
         // Stars first — sun and moon paint over them, so no star appears in front
         if (moonAlpha > 0.01f) {
@@ -138,7 +141,7 @@ public class SkyRenderer {
         // Sun
         if (dayNight.isSunUp()) {
             renderBody(camPos, dayNight.getSunDirection(),
-                       1.0f, 0.95f, 0.70f, 1.0f);
+                       1.0f, 0.95f, 0.70f, clearness);
         }
 
         // Moon — body is fully opaque so stars never show through it

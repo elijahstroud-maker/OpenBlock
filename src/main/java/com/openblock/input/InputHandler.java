@@ -5,6 +5,17 @@ import static org.lwjgl.glfw.GLFW.*;
 public class InputHandler {
     private final long window;
     private final boolean[] keys = new boolean[GLFW_KEY_LAST + 1];
+    /** True for one read after the key transitions to pressed (or repeats — used for backspace). */
+    private final boolean[] keyClicked = new boolean[GLFW_KEY_LAST + 1];
+    /** Printable characters typed since last consume (for the chat box). */
+    private final StringBuilder charQueue = new StringBuilder();
+    /**
+     * Text mode: chat is capturing the keyboard. Gameplay reads (isKeyDown,
+     * mouse buttons, mouse deltas) return neutral values so the player stops
+     * moving/looking/breaking while typing. Edge reads (isKeyJustPressed)
+     * still work — chat itself needs Enter/Backspace/Escape.
+     */
+    private boolean textMode = false;
 
     private double lastMouseX = 0;
     private double lastMouseY = 0;
@@ -27,8 +38,16 @@ public class InputHandler {
 
         glfwSetKeyCallback(window, (win, key, scancode, action, mods) -> {
             if (key >= 0 && key <= GLFW_KEY_LAST) {
-                if (action == GLFW_PRESS)   keys[key] = true;
+                if (action == GLFW_PRESS)   { keys[key] = true; keyClicked[key] = true; }
+                if (action == GLFW_REPEAT)  keyClicked[key] = true; // key-repeat for backspace etc.
                 if (action == GLFW_RELEASE) keys[key] = false;
+            }
+        });
+
+        glfwSetCharCallback(window, (win, codepoint) -> {
+            // Printable ASCII only — the AWT chat font covers this range
+            if (codepoint >= 32 && codepoint < 127) {
+                charQueue.append((char) codepoint);
             }
         });
 
@@ -66,6 +85,53 @@ public class InputHandler {
     public void poll() {
         // Mouse delta is accumulated in the callback; it's read by Player then reset externally.
         // Key state is maintained by callback.
+        if (textMode) {
+            // Chat is capturing input — don't let accumulated mouse movement
+            // spin the camera when it's consumed by Player.
+            mouseDX = 0;
+            mouseDY = 0;
+        }
+    }
+
+    /** Last cursor position (meaningful when the cursor is visible, e.g. death screen). */
+    public float getMouseX() { return (float) lastMouseX; }
+    public float getMouseY() { return (float) lastMouseY; }
+
+    /** Mouse click read that ignores text mode (death screen buttons). */
+    public boolean isMouseButtonJustPressedRaw(int button) {
+        if (button < 0 || button >= mouseDown.length) return false;
+        boolean v = mouseClicked[button];
+        mouseClicked[button] = false;
+        return v;
+    }
+
+    // ---------- text mode (chat) ----------
+
+    public void setTextMode(boolean on) {
+        textMode = on;
+        // Drop any pending typed characters: prevents the 't' or '/' that OPENED
+        // the chat from appearing in the input line, and stale chars on close.
+        charQueue.setLength(0);
+    }
+
+    public boolean isTextMode() { return textMode; }
+
+    /** Returns and clears all printable characters typed since the last call. */
+    public String consumeChars() {
+        String s = charQueue.toString();
+        charQueue.setLength(0);
+        return s;
+    }
+
+    /**
+     * One-shot: true once per key press (and once per OS key-repeat, so holding
+     * backspace keeps deleting). Works in text mode too — chat needs it.
+     */
+    public boolean isKeyJustPressed(int key) {
+        if (key < 0 || key > GLFW_KEY_LAST) return false;
+        boolean v = keyClicked[key];
+        keyClicked[key] = false;
+        return v;
     }
 
     /** Reset mouse delta after it has been consumed. */
@@ -80,12 +146,14 @@ public class InputHandler {
     }
 
     public boolean isKeyDown(int key) {
+        if (textMode) return false; // chat is capturing the keyboard
         if (key < 0 || key > GLFW_KEY_LAST) return false;
         return keys[key];
     }
 
     /** True if the button was just pressed this tick (one-shot, cleared after reading). */
     public boolean isMouseButtonJustPressed(int button) {
+        if (textMode) return false;
         if (button < 0 || button >= mouseDown.length) return false;
         boolean v = mouseClicked[button];
         mouseClicked[button] = false;
@@ -93,6 +161,7 @@ public class InputHandler {
     }
 
     public boolean isMouseButtonDown(int button) {
+        if (textMode) return false;
         if (button < 0 || button >= mouseDown.length) return false;
         return mouseDown[button];
     }

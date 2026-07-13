@@ -363,7 +363,7 @@ public class SoundManager {
             case STONE, COBBLESTONE, BEDROCK -> "stone";
             case SAND           -> "sand";
             case SNOW_GRASS     -> "snow";
-            case LOG            -> "wood";
+            case LOG, PLANKS, CRAFTING_TABLE -> "wood";
             case GRAVEL         -> "gravel";
             default             -> "grass"; // GRASS, DIRT, LEAVES, CACTUS
         };
@@ -374,7 +374,7 @@ public class SoundManager {
         return switch (block) {
             case STONE, COBBLESTONE, BEDROCK -> "stone";
             case SAND           -> "sand";
-            case LOG            -> "wood";
+            case LOG, PLANKS, CRAFTING_TABLE -> "wood";
             case GRAVEL         -> "gravel";
             default             -> "grass"; // SNOW_GRASS, GRASS, DIRT, LEAVES, CACTUS
         };

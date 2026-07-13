@@ -55,7 +55,8 @@ public class ItemDropRenderer {
             model.identity()
                  .translate(d.pos.x, d.pos.y + bob, d.pos.z)
                  .rotateY(d.age * SPIN_SPEED + d.phase)
-                 .scale(SCALE);
+                 // MC renders item sprites noticeably bigger than mini blocks
+                 .scale(d.type.item ? 0.4f : SCALE);
             shader.setUniform("uModel", model);
             cubeFor(d.type).render();
         }
@@ -91,6 +92,8 @@ public class ItemDropRenderer {
     }
 
     private Mesh buildCube(BlockType type) {
+        // Items (sticks) drop as extruded spinning sprites, like MC
+        if (type.item) return ItemSpriteMesh.build(atlas, type);
         float lo = -0.5f, hi = 0.5f;
         // Corner runs per face, same winding as BlockCrackRenderer's cube
         float[][] corners = {

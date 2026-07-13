@@ -184,6 +184,14 @@ public class World {
         drops.add(new ItemDrop(type, x, y, z, vx, vy, vz));
     }
 
+    /** Thrown drop carrying a whole stack (closing the inventory with items in hand). */
+    public void spawnThrownDrop(BlockType type, int count, float x, float y, float z,
+                                float vx, float vy, float vz) {
+        ItemDrop d = new ItemDrop(type, x, y, z, vx, vy, vz);
+        d.count = count;
+        drops.add(d);
+    }
+
     private void updateDrops(float delta) {
         Iterator<ItemDrop> it = drops.iterator();
         while (it.hasNext()) {

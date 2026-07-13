@@ -50,6 +50,14 @@ public class Renderer {
     private RainSplashRenderer rainSplash;
     private BlockParticleRenderer blockParticles;
     private SuffocationOverlay suffocation;
+    private HandRenderer hand;
+    private InventoryScreen inventoryScreen;
+    private PlayerModelRenderer playerModel;
+    /** F5: 0 = first person, 1 = third person behind, 2 = third person front. */
+    private int cameraMode = 0;
+    private final Matrix4f thirdPersonView = new Matrix4f();
+    private final Vector3f viewEyeTmp = new Vector3f();
+    private final Vector3f viewTargetTmp = new Vector3f();
     private final Matrix4f projection = new Matrix4f();
     private final Matrix4f model      = new Matrix4f();
     private final Matrix4f projView   = new Matrix4f();
@@ -75,12 +83,27 @@ public class Renderer {
         rainSplash   = new RainSplashRenderer();
         blockParticles = new BlockParticleRenderer(atlas);
         suffocation  = new SuffocationOverlay(atlas);
+        hand         = new HandRenderer(atlas);
+        inventoryScreen = new InventoryScreen();
+        playerModel  = new PlayerModelRenderer(atlas);
         updateProjection(window.width, window.height);
     }
 
-    /** Hooks the hotbar up to the player's inventory (called once from Game). */
+    /** Hooks the hotbar + inventory screen up to the player's inventory (called once from Game). */
     public void attachInventory(com.openblock.player.Inventory inventory) {
         hotbar.attach(inventory, atlas);
+        inventoryScreen.attach(inventory, atlas);
+    }
+
+    /** The E-key inventory screen (Game owns opening/closing + the cursor mode). */
+    public InventoryScreen getInventoryScreen() { return inventoryScreen; }
+
+    /** F5: cycles first person → behind → front, like Minecraft. */
+    public void cycleCameraMode() { cameraMode = (cameraMode + 1) % 3; }
+
+    /** Draws the inventory screen if open. Called by Game after the world render. */
+    public void renderInventoryScreen(InputHandler input, int screenW, int screenH) {
+        inventoryScreen.render(input, screenW, screenH);
     }
 
     public void updateProjection(int width, int height) {
@@ -110,13 +133,30 @@ public class Renderer {
         lastRenderNanos = now;
         float rain = weather.getIntensity();
 
-        // Detect if camera eye is submerged
-        org.joml.Vector3f eye = camera.getPosition();
+        // Camera eye + view matrix depend on the F5 mode. In third person the
+        // camera pulls back along the look axis (clamped so it never backs
+        // into terrain), and everything view-relative — fog, culling,
+        // underwater detection, weather — follows the CAMERA, not the
+        // player's head.
+        Vector3f playerEye = camera.getPosition();
+        Matrix4f view;
+        Vector3f eye;
+        if (cameraMode == 0) {
+            view = camera.getViewMatrix();
+            eye  = playerEye;
+        } else {
+            Vector3f front = camera.getFront();
+            float sign = cameraMode == 1 ? -1f : 1f; // behind vs in front
+            float dist = thirdPersonDist(world, playerEye, front, sign);
+            eye = viewEyeTmp.set(playerEye).fma(sign * dist, front);
+            // Behind: keep looking where the player looks. Front: look back at them.
+            viewTargetTmp.set(eye).fma(cameraMode == 1 ? 1f : -1f, front);
+            view = thirdPersonView.identity().lookAt(eye, viewTargetTmp, camera.getUp());
+        }
         BlockType eyeBlock = world.getBlock(
             (int) Math.floor(eye.x), (int) Math.floor(eye.y), (int) Math.floor(eye.z));
         underwater = eyeBlock == BlockType.WATER || eyeBlock == BlockType.WATER_FLOWING;
 
-        Matrix4f view = camera.getViewMatrix();
         frustum.set(projection.mul(view, projView));
 
         Vector3f fogColor;
@@ -154,7 +194,7 @@ public class Renderer {
 
         // 1. Sky bodies — skip when underwater (nothing to see); storms fade them out
         if (!underwater) {
-            sky.render(projection, view, camera.getPosition(), dayNight, 1f - rain);
+            sky.render(projection, view, eye, dayNight, 1f - rain);
         }
 
         // 2. Terrain chunks
@@ -190,6 +230,9 @@ public class Renderer {
         itemDrops.render(projection, view, world.getDrops(), eye, ambient);
         // Falling sand/gravel entities — full-size cubes, same shader/meshes
         itemDrops.renderFalling(projection, view, world.getFallingBlocks(), ambient);
+
+        // 2a''. The player's own body — visible in the third-person cameras
+        if (cameraMode != 0) playerModel.render(projection, view, player, ambient, frameDt);
 
         // 2a'. Block-crack particles (break bursts + mining chips) — before the
         // water pass so chips from underwater mining aren't depth-culled
@@ -238,7 +281,7 @@ public class Renderer {
         shader.detach();
 
         // 3. Clouds (alpha-blended, rendered before outline so clouds can occlude it)
-        clouds.render(projection, camera.getViewMatrix(), fogColor, ambient, fogStart, fogEnd);
+        clouds.render(projection, view, fogColor, ambient, fogStart, fogEnd);
 
         // 3b. Rain/snow curtains around the player (skipped underwater — the
         // surface is the roof). Above the snow line the same storm falls as snow,
@@ -267,10 +310,33 @@ public class Renderer {
             crack.render(projection, view, player.getBreakTarget(), player.getBreakProgress());
         }
 
+        // 3d. First-person hand/held block — over the world (depth cleared
+        // inside), under the HUD. First person only; skipped while buried:
+        // the dark cube is the whole view and a floating lit arm reads wrong.
+        if (cameraMode == 0 && !(eyeBlock.solid && eyeBlock.opaque)) {
+            hand.render(projection, player, ambient, frameDt);
+        }
+
         // 4. HUD — hotbar, hearts/bubbles/damage flash, version label
         hotbar.render(screenW, screenH);
         hud.render(screenW, screenH, player);
         versionLabel.render(screenW, screenH);
+    }
+
+    /**
+     * How far back the third-person camera can pull (MC's 4 blocks) before
+     * hitting terrain: marches along the view axis and stops just short of
+     * the first solid block so the camera never clips inside a wall.
+     */
+    private float thirdPersonDist(World world, Vector3f eye, Vector3f front, float sign) {
+        float max = 4.0f;
+        for (float t = 0.2f; t <= max; t += 0.05f) {
+            int bx = (int) Math.floor(eye.x + front.x * sign * t);
+            int by = (int) Math.floor(eye.y + front.y * sign * t);
+            int bz = (int) Math.floor(eye.z + front.z * sign * t);
+            if (world.getBlock(bx, by, bz).solid) return Math.max(0.15f, t - 0.35f);
+        }
+        return max;
     }
 
     /** Draws every collected water mesh (used by both the depth prepass and color pass). */
@@ -319,5 +385,8 @@ public class Renderer {
         if (rainSplash   != null) rainSplash.cleanup();
         if (blockParticles != null) blockParticles.cleanup();
         if (suffocation  != null) suffocation.cleanup();
+        if (hand         != null) hand.cleanup();
+        if (inventoryScreen != null) inventoryScreen.cleanup();
+        if (playerModel  != null) playerModel.cleanup();
     }
 }

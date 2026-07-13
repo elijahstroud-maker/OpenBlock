@@ -287,13 +287,26 @@ public class Hotbar {
             countPos[i][0] = x0 + SLOT_SIZE - 3;
             countPos[i][1] = slotsY + SLOT_SIZE - 2;
 
+            // scaled up briefly by the pickup pop (grows ~1.3x, eases back)
+            float s  = 17f * inventory.popScale(i); // block half-width
+
+            // Items (sticks) draw as flat sprites, like MC item icons
+            if (type.item) {
+                float[] uv = insetUV(atlas.getUV(type, TextureAtlas.Face.TOP));
+                float half = s * 1.35f;
+                vi += quad(verts, idxs, vi,
+                    cx - half, cy - half, uv[0], uv[1],
+                    cx + half, cy - half, uv[2], uv[1],
+                    cx + half, cy + half, uv[2], uv[3],
+                    cx - half, cy + half, uv[0], uv[3], 1.0f);
+                continue;
+            }
+
             // Isometric block: top diamond + two visible faces, in TRUE dimetric
             // proportions (30° pitch / 45° yaw — Minecraft's GUI projection):
             // the top diamond is 2:1 wide, and the vertical faces are
             // s * sqrt(1.5) ≈ 1.22 * s tall. Anything squatter reads as a
             // squashed tile instead of a cube.
-            // scaled up briefly by the pickup pop (grows ~1.3x, eases back)
-            float s  = 17f * inventory.popScale(i); // block half-width
             float hh = s * 0.5f;            // top-diamond half-height
             float fh = s * 1.22f;           // vertical face height
             float topY = cy - (hh + fh / 2f); // centre the icon in the slot
@@ -302,9 +315,9 @@ public class Hotbar {
             float sX = cx,     sY = topY + 2f * hh;   // bottom of the top face
             float wX = cx - s, wY = topY + hh;
 
-            float[] top   = atlas.getUV(type, TextureAtlas.Face.TOP);
-            float[] north = atlas.getUV(type, TextureAtlas.Face.NORTH);
-            float[] east  = atlas.getUV(type, TextureAtlas.Face.EAST);
+            float[] top   = insetUV(atlas.getUV(type, TextureAtlas.Face.TOP));
+            float[] north = insetUV(atlas.getUV(type, TextureAtlas.Face.NORTH));
+            float[] east  = insetUV(atlas.getUV(type, TextureAtlas.Face.EAST));
 
             // Top face (light 1.0): W→N→E→S sheared tile
             vi += quad(verts, idxs, vi,
@@ -326,6 +339,13 @@ public class Hotbar {
         int[] ia = new int[idxs.size()];
         for (int i = 0; i < ia.length; i++) ia[i] = idxs.get(i);
         iconMesh.upload(va, ia);
+    }
+
+    /** Half-texel UV inset so tile-edge sampling can't bleed into neighbors. */
+    private static float[] insetUV(float[] uv) {
+        float du = (uv[2] - uv[0]) / TextureAtlas.TILE_SIZE * 0.5f;
+        float dv = (uv[1] - uv[3]) / TextureAtlas.TILE_SIZE * 0.5f;
+        return new float[]{uv[0] + du, uv[1] - dv, uv[2] - du, uv[3] + dv};
     }
 
     /** One textured quad with 4 explicit corners/UVs and a face light. */

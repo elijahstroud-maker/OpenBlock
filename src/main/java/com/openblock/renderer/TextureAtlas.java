@@ -27,7 +27,7 @@ import static org.lwjgl.stb.STBImage.stbi_image_free;
  */
 public class TextureAtlas {
     public static final int TILE_SIZE   = 16;
-    public static final int TILE_COUNT  = 19; // tiles in one row
+    public static final int TILE_COUNT  = 24; // tiles in one row
     public static final int ATLAS_W     = TILE_SIZE * TILE_COUNT; // 304
     public static final int ATLAS_H     = TILE_SIZE;               // 16
 
@@ -98,6 +98,15 @@ public class TextureAtlas {
         set(BlockType.WATER_FLOWING, Face.WEST,   16);
         for (Face f : Face.values()) set(BlockType.GRAVEL, f, 15);
         for (Face f : Face.values()) set(BlockType.COBBLESTONE, f, 17);
+
+        for (Face f : Face.values()) set(BlockType.PLANKS, f, 19);
+        set(BlockType.CRAFTING_TABLE, Face.TOP,    20);
+        set(BlockType.CRAFTING_TABLE, Face.BOTTOM, 19); // planks underneath, like MC
+        set(BlockType.CRAFTING_TABLE, Face.NORTH,  22); // front (tools graphic)
+        set(BlockType.CRAFTING_TABLE, Face.SOUTH,  22);
+        set(BlockType.CRAFTING_TABLE, Face.EAST,   21); // side
+        set(BlockType.CRAFTING_TABLE, Face.WEST,   21);
+        for (Face f : Face.values()) set(BlockType.STICK, f, 23); // flat item sprite
     }
 
     private static void set(BlockType bt, Face f, int col) {
@@ -225,6 +234,18 @@ public class TextureAtlas {
             fillTileStone(buf, 17);
         // Tile 18: magenta fallback
         fillTile(buf, 18, 0xFF, 0x00, 0xFF, 0xFF);
+        // Tiles 19-22: planks + crafting table
+        if (!blitResource(buf, 19, "/textures/oak_planks.png"))
+            fillTile(buf, 19, 0xA0, 0x81, 0x4B, 0xFF);
+        if (!blitResource(buf, 20, "/textures/crafting_table_top.png"))
+            fillTile(buf, 20, 0x9E, 0x7A, 0x47, 0xFF);
+        if (!blitResource(buf, 21, "/textures/crafting_table_side.png"))
+            fillTile(buf, 21, 0x8B, 0x6C, 0x40, 0xFF);
+        if (!blitResource(buf, 22, "/textures/crafting_table_front.png"))
+            fillTile(buf, 22, 0x8B, 0x6C, 0x40, 0xFF);
+        // Tile 23: stick (item sprite — transparency matters, don't force opaque)
+        if (!blitResource(buf, 23, "/textures/item/stick.png"))
+            fillTile(buf, 23, 0x6B, 0x43, 0x1D, 0xFF);
 
         buf.flip();
         return buf;

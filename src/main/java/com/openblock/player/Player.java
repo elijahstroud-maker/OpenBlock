@@ -101,6 +101,29 @@ public class Player {
     /** Hold-to-place repeat interval (MC places every 4 game ticks). */
     private static final float PLACE_INTERVAL = 0.25f;
     private float placeCooldown = 0f;
+    /** Set when the player right-clicks a crafting table; Game opens the GUI. */
+    private boolean tableClicked = false;
+
+    // ---- First-person arm swing (punching/mining/placing) ----
+    /** One full swing arc, MC's swing duration (6 ticks). */
+    private static final float SWING_TIME = 0.30f;
+    private float swingTimer = -1f; // <0 = not swinging
+
+    // ---- Crouching (Shift on land, MC rules) ----
+    /** MC sneak speed: 30% of walking. */
+    private static final float CROUCH_SPEED_MULT = 0.3f;
+    /** MC sneak eye drop: 1.62 → 1.54 (render-only, physics unchanged). */
+    private static final float CROUCH_EYE_DROP = 0.08f;
+    private boolean crouching = false;
+    private float crouchEyeOffset = 0f;
+
+    // ---- Third-person walk animation state (MC's limbSwing pair) ----
+    /** Accumulated stride phase; advances ~20/s at full walking speed. */
+    private float limbSwing = 0f;
+    /** Eased 0..1 walk intensity — scales the limb swing amplitude. */
+    private float limbSwingAmount = 0f;
+    /** Time in ticks for MC's idle arm sway. */
+    private float ageTicks = 0f;
 
     public Player(World world, InputHandler input, SoundManager sounds) {
         this.world  = world;
@@ -224,6 +247,13 @@ public class Player {
         tmpRight.set(camera.getRight().x, 0, camera.getRight().z);
         if (tmpRight.lengthSquared() > 0.0001f) tmpRight.normalize();
 
+        // Crouch: Shift on land (in water Shift already means "sink"). The
+        // eye drop is render-only, eased so the camera dips smoothly.
+        crouching = input.isKeyDown(GLFW_KEY_LEFT_SHIFT) && !inWater;
+        float crouchTarget = crouching ? -CROUCH_EYE_DROP : 0f;
+        crouchEyeOffset += (crouchTarget - crouchEyeOffset) * Math.min(1f, delta * 12f);
+        camera.setCrouchOffset(crouchEyeOffset);
+
         tmpMove.set(0, 0, 0);
         if (input.isKeyDown(GLFW_KEY_W)) tmpMove.add(tmpFwd);
         if (input.isKeyDown(GLFW_KEY_S)) tmpMove.sub(tmpFwd);
@@ -231,7 +261,7 @@ public class Player {
         if (input.isKeyDown(GLFW_KEY_A)) tmpMove.sub(tmpRight);
         boolean movingHorizontally = tmpMove.lengthSquared() > 0;
         if (movingHorizontally) tmpMove.normalize();
-        tmpMove.mul(inWater ? SPEED_WATER : SPEED);
+        tmpMove.mul(inWater ? SPEED_WATER : (crouching ? SPEED * CROUCH_SPEED_MULT : SPEED));
         velocity.x = tmpMove.x;
         velocity.z = tmpMove.z;
 
@@ -281,7 +311,12 @@ public class Player {
 
         // X
         float newX = camera.getPosition().x + velocity.x * delta;
-        if (!collidesAtNew(newX, foot, camera.getPosition().z, foot)) {
+        if (crouching && onGround && velocity.x != 0
+                && !collidesAt(newX, foot - 0.05f, camera.getPosition().z)) {
+            // Sneak edge-guard (MC): no ground under where you'd end up —
+            // stop at the lip instead of walking off.
+            velocity.x = 0;
+        } else if (!collidesAtNew(newX, foot, camera.getPosition().z, foot)) {
             camera.getPosition().x = newX;
         } else if (onGround && !collidesAt(newX, foot + 0.5f, camera.getPosition().z)) {
             // Ground step-up (0.5 block — stairs/slabs): instant snap, small enough to be invisible
@@ -305,7 +340,10 @@ public class Player {
 
         // Z
         float newZ = camera.getPosition().z + velocity.z * delta;
-        if (!collidesAtNew(camera.getPosition().x, foot, newZ, foot)) {
+        if (crouching && onGround && velocity.z != 0
+                && !collidesAt(camera.getPosition().x, foot - 0.05f, newZ)) {
+            velocity.z = 0; // sneak edge-guard
+        } else if (!collidesAtNew(camera.getPosition().x, foot, newZ, foot)) {
             camera.getPosition().z = newZ;
         } else if (onGround && !collidesAt(camera.getPosition().x, foot + 0.5f, newZ)) {
             camera.getPosition().z = newZ;
@@ -333,7 +371,13 @@ public class Player {
         if (!collidesAtNew(camera.getPosition().x, newFoot, camera.getPosition().z,
                            camera.getPosition().y - EYE_HEIGHT)) {
             camera.getPosition().y = newEyeY;
-            onGround = false;
+            // Standing still (velocity 0) on solid ground must STAY grounded —
+            // clearing the flag here made onGround flicker on alternating
+            // ticks (clear → gravity → re-land), which let sneakers creep off
+            // edges and randomly applied the mid-air mining penalty.
+            boolean restingOnGround = velocity.y == 0f && onGround
+                && collidesAt(camera.getPosition().x, newFoot - 0.05f, camera.getPosition().z);
+            if (!restingOnGround) onGround = false;
         } else {
             if (velocity.y < 0) {
                 onGround = true;
@@ -369,6 +413,16 @@ public class Player {
             }
         }
 
+        // Third-person walk animation drivers — MC's exact limbSwing pair
+        // (EntityLivingBase): amount targets min(distPerTick * 4, 1), eased at
+        // 0.4/tick, and the phase advances by the amount each tick. At full
+        // walking speed that's amplitude ~0.86 and a ~1.8 Hz stride.
+        float animSpeed = (float) Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
+        limbSwingAmount += (Math.min(animSpeed * 0.2f, 1f) - limbSwingAmount)
+                         * Math.min(1f, delta * 8f);
+        limbSwing += limbSwingAmount * 20f * delta;
+        ageTicks  += delta * 20f;
+
         // Swim view-bob: bob amplitude scales with horizontal speed, so drifting is
         // near-flat and active swimming gently bobs the camera. Eased so it fades in
         // and out instead of snapping. Render-only via Camera.setBobOffset.
@@ -381,10 +435,41 @@ public class Player {
         collectNearbyDrops();
         inventory.update(delta); // pickup-pop icon animation timers
 
+        // Arm swing progress (drives the first-person hand animation)
+        if (swingTimer >= 0f) {
+            swingTimer += delta;
+            if (swingTimer >= SWING_TIME) swingTimer = -1f;
+        }
+
         // Q tosses one item from the selected slot. Always consume the key edge
-        // so a press while typing in chat doesn't fire later; ignore it there.
+        // so a press while typing in chat doesn't fire later; ignore it there
+        // and while the inventory screen has the mouse.
         boolean qPressed = input.isKeyJustPressed(GLFW_KEY_Q);
-        if (qPressed && !input.isTextMode()) dropSelectedItem();
+        if (qPressed && !input.isTextMode() && !input.isUiCapture()) dropSelectedItem();
+    }
+
+    /** Starts (or restarts) the first-person arm swing. */
+    public void swingArm() { swingTimer = 0f; }
+
+    /** Swing arc progress 0..1, or 0 when the arm is at rest. */
+    public float getSwingProgress() {
+        return swingTimer < 0f ? 0f : Math.min(1f, swingTimer / SWING_TIME);
+    }
+
+    public boolean isSwinging() { return swingTimer >= 0f; }
+
+    /** Tosses a whole stack out in front (inventory screen closed with items in hand). */
+    public void tossItem(BlockType type, int count) {
+        if (type == null || count <= 0) return;
+        Vector3f eye = camera.getPosition();
+        Vector3f dir = camera.getFront();
+        world.spawnThrownDrop(type, count,
+            eye.x + dir.x * 0.4f,
+            eye.y - 0.3f + dir.y * 0.4f,
+            eye.z + dir.z * 0.4f,
+            dir.x * 5.5f + (float) (Math.random() - 0.5) * 0.6f,
+            dir.y * 5.5f + 1.2f,
+            dir.z * 5.5f + (float) (Math.random() - 0.5) * 0.6f);
     }
 
     /** Tosses a single item from the selected slot out in front, Minecraft-style. */
@@ -685,7 +770,8 @@ public class Player {
             case DIRT, SAND           -> 0.75f; // hardness 0.5
             case GRASS, SNOW_GRASS,
                  GRAVEL               -> 0.90f; // hardness 0.6
-            case LOG                  -> 3.00f; // hardness 2.0, hand-harvestable
+            case LOG, PLANKS          -> 3.00f; // hardness 2.0, hand-harvestable
+            case CRAFTING_TABLE       -> 3.75f; // hardness 2.5, hand-harvestable
             case STONE                -> 7.50f; // hardness 1.5 x5 — needs a pickaxe
             case COBBLESTONE          -> 10.0f; // hardness 2.0 x5 — needs a pickaxe
             default                   -> 1.00f;
@@ -699,6 +785,8 @@ public class Player {
      * click (like pre-survival breaking) — not a continuous sweep.
      */
     public void updateBreaking(float delta, boolean holding, boolean justClicked) {
+        if (justClicked) swingArm(); // any left click swings, even at air (MC)
+
         if (adminMode) {
             breakTarget = null;
             breakProgress = 0f;
@@ -723,6 +811,7 @@ public class Player {
             breakProgress = 0f;
             return;
         }
+        if (!isSwinging()) swingArm(); // keep swinging while mining (MC)
         BlockType block = world.getBlock(t[0], t[1], t[2]);
         if (block == BlockType.BEDROCK) {
             // Unbreakable in survival, but punchable forever: hit sounds and
@@ -808,6 +897,13 @@ public class Player {
         };
     }
 
+    /** True once after the player right-clicked a crafting table (Game opens the GUI). */
+    public boolean popTableClicked() {
+        boolean v = tableClicked;
+        tableClicked = false;
+        return v;
+    }
+
     /** Block currently being mined (null when not mining). */
     public int[] getBreakTarget()   { return breakTarget; }
     /** Mining progress 0..1 for the crack overlay. */
@@ -828,8 +924,18 @@ public class Player {
         }
         if (!justClicked && placeCooldown > 0f) return;
 
+        // Right-clicking a crafting table opens its 3x3 GUI instead of
+        // placing (MC: sneak + click to place a block against it instead)
+        if (justClicked && !crouching) {
+            int[] t = getTargetBlock();
+            if (t != null && world.getBlock(t[0], t[1], t[2]) == BlockType.CRAFTING_TABLE) {
+                tableClicked = true;
+                return;
+            }
+        }
+
         BlockType type = inventory.getType(inventory.getSelected());
-        if (type == null) return;
+        if (type == null || type.item) return; // items (sticks) can't be placed
 
         int[] cell = getPlacementCell();
         if (cell == null) return;
@@ -840,6 +946,7 @@ public class Player {
         world.setBlock(cell[0], cell[1], cell[2], type);
         if (!adminMode) inventory.consume(inventory.getSelected());
         sounds.playBreak(type); // MC's place sound is the block's dig sound
+        swingArm();
         placeCooldown = PLACE_INTERVAL;
     }
 
@@ -880,6 +987,22 @@ public class Player {
     public Inventory getInventory() { return inventory; }
 
     public Camera getCamera() { return camera; }
+
+    /** Current velocity (read-only use — the hand renderer's walk bob). */
+    public Vector3f getVelocity() { return velocity; }
+
+    public boolean isOnGround() { return onGround; }
+
+    public boolean isCrouching() { return crouching; }
+
+    /** Walk-cycle phase for the third-person model (MC's limbSwing). */
+    public float getLimbSwing() { return limbSwing; }
+
+    /** Walk-cycle amplitude 0..1 (MC's limbSwingAmount). */
+    public float getLimbSwingAmount() { return limbSwingAmount; }
+
+    /** Lifetime in ticks — drives MC's idle arm sway. */
+    public float getAgeTicks() { return ageTicks; }
 
     /** Player's foot height in world blocks (used for the rain→snow altitude switch). */
     public float getFootY() { return camera.getPosition().y - EYE_HEIGHT; }

@@ -16,6 +16,14 @@ public class InputHandler {
      * still work — chat itself needs Enter/Backspace/Escape.
      */
     private boolean textMode = false;
+    /**
+     * UI capture: a mouse-driven screen (inventory) owns the input. Same
+     * gameplay freeze as text mode — movement keys, mouse buttons, and look
+     * deltas all read neutral — but typed characters aren't collected. Edge
+     * reads (isKeyJustPressed / isMouseButtonJustPressedRaw) still work; the
+     * screen itself needs E/Escape and slot clicks.
+     */
+    private boolean uiCapture = false;
 
     private double lastMouseX = 0;
     private double lastMouseY = 0;
@@ -85,9 +93,9 @@ public class InputHandler {
     public void poll() {
         // Mouse delta is accumulated in the callback; it's read by Player then reset externally.
         // Key state is maintained by callback.
-        if (textMode) {
-            // Chat is capturing input — don't let accumulated mouse movement
-            // spin the camera when it's consumed by Player.
+        if (textMode || uiCapture) {
+            // Chat/inventory is capturing input — don't let accumulated mouse
+            // movement spin the camera when it's consumed by Player.
             mouseDX = 0;
             mouseDY = 0;
         }
@@ -96,6 +104,18 @@ public class InputHandler {
     /** Last cursor position (meaningful when the cursor is visible, e.g. death screen). */
     public float getMouseX() { return (float) lastMouseX; }
     public float getMouseY() { return (float) lastMouseY; }
+
+    /** Key-held read that ignores text/UI capture (inventory shift-click). */
+    public boolean isKeyDownRaw(int key) {
+        if (key < 0 || key > GLFW_KEY_LAST) return false;
+        return keys[key];
+    }
+
+    /** Mouse-held read that ignores text/UI capture (inventory drag-split). */
+    public boolean isMouseButtonDownRaw(int button) {
+        if (button < 0 || button >= mouseDown.length) return false;
+        return mouseDown[button];
+    }
 
     /** Mouse click read that ignores text mode (death screen buttons). */
     public boolean isMouseButtonJustPressedRaw(int button) {
@@ -115,6 +135,18 @@ public class InputHandler {
     }
 
     public boolean isTextMode() { return textMode; }
+
+    // ---------- UI capture (inventory screen) ----------
+
+    public void setUiCapture(boolean on) { uiCapture = on; }
+
+    public boolean isUiCapture() { return uiCapture; }
+
+    /** Drops all pending one-shot key presses (leaving a UI screen — keys
+     *  pressed while it was up shouldn't fire into gameplay afterwards). */
+    public void clearKeyEdges() {
+        java.util.Arrays.fill(keyClicked, false);
+    }
 
     /** Returns and clears all printable characters typed since the last call. */
     public String consumeChars() {
@@ -146,14 +178,14 @@ public class InputHandler {
     }
 
     public boolean isKeyDown(int key) {
-        if (textMode) return false; // chat is capturing the keyboard
+        if (textMode || uiCapture) return false; // chat/inventory is capturing the keyboard
         if (key < 0 || key > GLFW_KEY_LAST) return false;
         return keys[key];
     }
 
     /** True if the button was just pressed this tick (one-shot, cleared after reading). */
     public boolean isMouseButtonJustPressed(int button) {
-        if (textMode) return false;
+        if (textMode || uiCapture) return false;
         if (button < 0 || button >= mouseDown.length) return false;
         boolean v = mouseClicked[button];
         mouseClicked[button] = false;
@@ -161,7 +193,7 @@ public class InputHandler {
     }
 
     public boolean isMouseButtonDown(int button) {
-        if (textMode) return false;
+        if (textMode || uiCapture) return false;
         if (button < 0 || button >= mouseDown.length) return false;
         return mouseDown[button];
     }

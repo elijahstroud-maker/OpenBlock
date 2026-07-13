@@ -18,6 +18,8 @@ public class Camera {
     private final Vector3f tmpEye     = new Vector3f();
     /** Render-only vertical eye offset for swim view-bob (never affects physics). */
     private float bobOffsetY = 0f;
+    /** Render-only eye drop while crouching (MC: 1.62 → 1.54). */
+    private float crouchOffsetY = 0f;
 
     public Camera() {
         updateVectors();
@@ -44,15 +46,18 @@ public class Camera {
     }
 
     public Matrix4f getViewMatrix() {
-        // Apply the view-bob as a render-only eye offset so it never feeds back
-        // into physics/collision (which read position directly).
-        position.add(0f, bobOffsetY, 0f, tmpEye);
+        // Apply the view-bob and crouch dip as render-only eye offsets so they
+        // never feed back into physics/collision (which read position directly).
+        position.add(0f, bobOffsetY + crouchOffsetY, 0f, tmpEye);
         tmpEye.add(front, tmpTarget);
         return viewMatrix.identity().lookAt(tmpEye, tmpTarget, up);
     }
 
     /** Render-only vertical eye offset for swim view-bob. */
     public void setBobOffset(float y) { this.bobOffsetY = y; }
+
+    /** Render-only eye drop while crouching. */
+    public void setCrouchOffset(float y) { this.crouchOffsetY = y; }
 
     public Vector3f getPosition() { return position; }
     public Vector3f getFront()    { return front; }

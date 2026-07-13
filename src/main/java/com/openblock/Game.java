@@ -8,6 +8,7 @@ import com.openblock.player.Player;
 import com.openblock.renderer.ChatOverlay;
 import com.openblock.renderer.DayNightCycle;
 import com.openblock.renderer.DeathScreen;
+import com.openblock.renderer.InventoryScreen;
 import com.openblock.renderer.LoadingScreen;
 import com.openblock.renderer.Renderer;
 import com.openblock.weather.Weather;
@@ -40,6 +41,8 @@ public class Game {
     private boolean loading = true;
     /** Cursor is released (visible) while the death screen is up. */
     private boolean cursorReleased = false;
+    /** Blocks the ESC-to-quit for a moment after ESC closed the inventory. */
+    private float invEscCooldown = 0f;
 
     public void run() {
         try {
@@ -104,8 +107,9 @@ public class Game {
             window.swapBuffers();
             window.pollEvents();
 
-            // Escape to quit — unless the chat is using it to close itself
+            // Escape to quit — unless the chat or inventory is using it to close itself
             if (!chat.isOpen() && !chat.escRecentlyUsed()
+                    && !renderer.getInventoryScreen().isOpen() && invEscCooldown <= 0f
                     && glfwGetKey(window.handle, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
                 glfwSetWindowShouldClose(window.handle, true);
             }
@@ -116,9 +120,12 @@ public class Game {
         if (!loading) {
             dayNight.update(delta); // the world keeps turning, dead or alive
             weather.update(delta);
+            if (invEscCooldown > 0f) invEscCooldown -= delta;
 
+            InventoryScreen inv = renderer.getInventoryScreen();
             if (player.isDead()) {
                 chat.forceClose(input);
+                if (inv.isOpen()) closeInventory(inv, false); // death screen takes the cursor
                 if (!cursorReleased) {
                     glfwSetInputMode(window.handle, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
                     glfwSetCursorPos(window.handle, window.width / 2.0, window.height / 2.0);
@@ -130,6 +137,7 @@ public class Game {
                         player.respawn();
                         glfwSetInputMode(window.handle, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                         input.resetMouseDelta();
+                        input.clearKeyEdges(); // keys pressed on the death screen stay there
                         cursorReleased = false;
                     }
                     case EXIT -> {
@@ -139,7 +147,26 @@ public class Game {
                     case NONE -> { }
                 }
             } else {
-                chat.update(input, delta, player, weather, dayNight);
+                // F5 cycles first person → behind → front, like Minecraft
+                if (input.isKeyJustPressed(GLFW_KEY_F5)) renderer.cycleCameraMode();
+
+                // E toggles the inventory screen; Escape also closes it. The
+                // edge is always consumed so an 'e' typed in chat can't open
+                // the screen later.
+                boolean ePressed = input.isKeyJustPressed(GLFW_KEY_E);
+                if (inv.isOpen()) {
+                    boolean escPressed = input.isKeyJustPressed(GLFW_KEY_ESCAPE);
+                    if (ePressed || escPressed) {
+                        if (escPressed) invEscCooldown = 0.4f;
+                        closeInventory(inv, true);
+                    } else {
+                        inv.update(input, player, window.width, window.height);
+                    }
+                } else if (!chat.isOpen() && !input.isTextMode() && ePressed) {
+                    openScreen(inv, InventoryScreen.Mode.PLAYER);
+                }
+
+                if (!inv.isOpen()) chat.update(input, delta, player, weather, dayNight);
                 player.update(delta);
 
                 // Hold-to-mine; admin mode breaks one block per click instead.
@@ -151,6 +178,10 @@ public class Game {
                 player.updatePlacing(delta,
                     input.isMouseButtonDown(GLFW_MOUSE_BUTTON_RIGHT),
                     input.isMouseButtonJustPressed(GLFW_MOUSE_BUTTON_RIGHT));
+                // Right-clicked a crafting table: open its 3x3 GUI
+                if (player.popTableClicked() && !inv.isOpen()) {
+                    openScreen(inv, InventoryScreen.Mode.TABLE);
+                }
             }
 
             String deathMsg = player.popDeathMessage();
@@ -166,7 +197,11 @@ public class Game {
             renderer.updateClouds(delta,
                 player.getCamera().getPosition().x,
                 player.getCamera().getPosition().z);
-            renderer.updateHotbar(input);
+            if (renderer.getInventoryScreen().isOpen()) {
+                input.resetScrollDelta(); // scrolling over the screen shouldn't switch slots
+            } else {
+                renderer.updateHotbar(input);
+            }
             music.update(delta, dayNight.isSunUp());
             // Rain patter: silent when clear or snowing (like MC), and muffled
             // by cover — fading out with depth in caves and mines. Just under
@@ -188,6 +223,31 @@ public class Game {
                 }
             }
             sounds.updateRainAmbient(rainTarget, duck, delta, renderer.isUnderwater());
+        }
+    }
+
+    /** Opens the inventory/crafting screen: cursor released, gameplay input frozen. */
+    private void openScreen(InventoryScreen inv, InventoryScreen.Mode mode) {
+        inv.open(mode);
+        input.setUiCapture(true);
+        glfwSetInputMode(window.handle, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        glfwSetCursorPos(window.handle, window.width / 2.0, window.height / 2.0);
+    }
+
+    /**
+     * Closes the inventory screen: crafting grid + held stack return to the
+     * inventory (overflow is tossed) and gameplay input resumes. The cursor is
+     * only re-grabbed when gameplay continues — the death screen keeps it free.
+     */
+    private void closeInventory(InventoryScreen inv, boolean grabCursor) {
+        inv.onClose(player);
+        inv.setOpen(false);
+        input.setUiCapture(false);
+        input.clearKeyEdges(); // keys pressed over the screen don't fire into gameplay
+        input.resetScrollDelta();
+        if (grabCursor) {
+            glfwSetInputMode(window.handle, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            input.resetMouseDelta();
         }
     }
 
@@ -233,6 +293,7 @@ public class Game {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             renderer.render(world, player, dayNight, weather, window.width, window.height);
             chat.render(window.width, window.height);
+            renderer.renderInventoryScreen(input, window.width, window.height);
             if (player.isDead()) deathScreen.render(input, window.width, window.height);
         }
     }

@@ -110,7 +110,7 @@ public class PlayerModelRenderer {
                            : 0.28f; // stick
                 handMatrix.translate(-1f, -9.8f, 0.5f)
                           .rotateY((float) Math.toRadians(-90.0))
-                          .rotateZ((float) Math.toRadians(10.0))
+                          .rotateZ((float) Math.toRadians(-10.0))
                           .scale(12f)
                           .translate(grip, grip, 0f)
                           // 180° about the handle diagonal: third person shows

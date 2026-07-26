@@ -181,7 +181,8 @@ public class BlockCrackRenderer {
         // discarded in crack.frag so they don't black out the face.
         glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR);
         glDepthFunc(GL_LEQUAL);
-        glDepthMask(false);
+        // Depth writes stay ON — see BlockOutlineRenderer: keeps distant water
+        // from blending over the crack overlay
         glDisable(GL_CULL_FACE);
 
         shader.use();

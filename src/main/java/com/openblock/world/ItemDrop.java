@@ -26,6 +26,8 @@ public class ItemDrop {
     public final Vector3f pos = new Vector3f();
     public final Vector3f vel = new Vector3f();
     public int   count = 1;      // nearby same-type drops merge, up to 64
+    /** Remaining uses if this is a tool (0 for ordinary block/item drops). */
+    public int   durability = 0;
     public float age   = 0f;
     /** Per-item phase so a pile of drops doesn't spin/bob in lockstep. */
     public final float phase = RNG.nextFloat() * (float) (Math.PI * 2);
@@ -61,6 +63,9 @@ public class ItemDrop {
         vel.set(vx, vy, vz);
         pickupDelay = 2.0f; // MC: 40 ticks before the thrower can re-collect it
     }
+
+    /** Fluent: stamps the tool's current wear onto a just-created drop. */
+    public ItemDrop withDurability(int d) { this.durability = d; return this; }
 
     /** True once the item should be removed (despawn timer ran out). */
     public boolean expired() { return age > DESPAWN_AGE; }

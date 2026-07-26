@@ -50,7 +50,9 @@ public class BlockParticleRenderer {
     public void update(World world, float delta) {
         List<World.BlockParticles> events = world.getParticleEvents();
         if (!events.isEmpty()) {
-            for (World.BlockParticles e : events) spawnChips(e);
+            for (World.BlockParticles e : events) {
+                if (e.burst()) spawnBurst(e); else spawnChips(e);
+            }
             events.clear();
         }
 
@@ -92,6 +94,31 @@ public class BlockParticleRenderer {
                 py[i] = ny;
             }
             i++;
+        }
+    }
+
+    /**
+     * Block destroyed: MC's burst — the block volume subdivided 4x4x4, one
+     * chip per cell thrown outward from the block center, so the block
+     * visibly shatters into the debris that then rains down and settles.
+     */
+    private void spawnBurst(World.BlockParticles e) {
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                for (int k = 0; k < 4; k++) {
+                    if (count >= MAX) return;
+                    float ox = (i + 0.5f) / 4f, oy = (j + 0.5f) / 4f, oz = (k + 0.5f) / 4f;
+                    // Outward from center plus a bit of random scatter and an
+                    // upward hop, scaled down toward MC's gentle pop — the
+                    // chips mostly collapse into a heap, not a firework
+                    spawn(e.type(),
+                        e.x() + ox, e.y() + oy, e.z() + oz,
+                        (ox - 0.5f) * 4f * (0.4f + rng.nextFloat() * 0.6f),
+                        (oy - 0.5f) * 4f * (0.4f + rng.nextFloat() * 0.6f)
+                            + 0.8f + rng.nextFloat() * 0.8f,
+                        (oz - 0.5f) * 4f * (0.4f + rng.nextFloat() * 0.6f));
+                }
+            }
         }
     }
 
@@ -174,7 +201,8 @@ public class BlockParticleRenderer {
 
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(false);
+        // Depth writes stay ON: the water pass depth-tests against these, so
+        // chips in front of water don't get the ocean blended over them
         glDisable(GL_CULL_FACE);
 
         shader.use();
@@ -190,7 +218,6 @@ public class BlockParticleRenderer {
         shader.detach();
 
         glEnable(GL_CULL_FACE);
-        glDepthMask(true);
         glDisable(GL_BLEND);
     }
 

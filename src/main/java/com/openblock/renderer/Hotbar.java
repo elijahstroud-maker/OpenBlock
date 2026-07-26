@@ -1,5 +1,6 @@
 package com.openblock.renderer;
 
+import com.openblock.crafting.Tools;
 import com.openblock.input.InputHandler;
 import com.openblock.player.Inventory;
 import com.openblock.world.BlockType;
@@ -62,6 +63,8 @@ public class Hotbar {
     private final ShaderProgram shader;
     private final ShaderProgram iconShader; // ui.vert + text.frag: atlas icons + count labels
     private final Texture whiteTexture;
+    /** Durability-bar swatches: dark backing track, green/yellow/red fill. */
+    private final Texture durBarBg, durBarGreen, durBarYellow, durBarRed;
     private final Matrix4f projection = new Matrix4f();
 
     private Mesh mesh;
@@ -81,12 +84,29 @@ public class Hotbar {
     /** Screen position of each slot's count label for the current layout. */
     private final int[][] countPos = new int[SLOTS][2];
     private final int[]   countVal = new int[SLOTS];
+    /** Durability bar geometry per slot: {x0, y1, width}; durVal/durMax 0 = not a tool. */
+    private final int[][] durPos = new int[SLOTS][3];
+    private final int[]   durVal = new int[SLOTS];
+    private final int[]   durMax = new int[SLOTS];
     private final Mesh labelMesh = new Mesh(); // scratch quad reused per label
 
     public Hotbar() {
         shader       = new ShaderProgram("/shaders/ui.vert", "/shaders/ui.frag");
         iconShader   = new ShaderProgram("/shaders/ui.vert", "/shaders/text.frag");
         whiteTexture = buildWhiteTexture();
+        durBarBg     = solidSwatch(0x00, 0x00, 0x00);
+        durBarGreen  = solidSwatch(0x30, 0xE0, 0x30);
+        durBarYellow = solidSwatch(0xE0, 0xC8, 0x20);
+        durBarRed    = solidSwatch(0xE0, 0x30, 0x30);
+    }
+
+    private static Texture solidSwatch(int r, int g, int b) {
+        ByteBuffer buf = MemoryUtil.memAlloc(4);
+        buf.put((byte) r).put((byte) g).put((byte) b).put((byte) 0xFF);
+        buf.flip();
+        Texture t = new Texture(buf, 1, 1);
+        MemoryUtil.memFree(buf);
+        return t;
     }
 
     /** Hooks the hotbar up to the player's inventory and the block atlas. */
@@ -165,6 +185,9 @@ public class Hotbar {
             if (countVal[i] > 1) {
                 Label l = countTexFor(countVal[i]);
                 drawLabel(l, countPos[i][0] - l.w() * 2, countPos[i][1] - l.h() * 2);
+            }
+            if (durMax[i] > 0) {
+                drawDurabilityBar(durPos[i][0], durPos[i][1], durPos[i][2], durVal[i], durMax[i]);
             }
         }
 
@@ -260,7 +283,7 @@ public class Hotbar {
      * Minecraft item look), and records where each stack count label goes.
      */
     private void rebuildIcons(int w, int h) {
-        for (int i = 0; i < SLOTS; i++) countVal[i] = 0;
+        for (int i = 0; i < SLOTS; i++) { countVal[i] = 0; durMax[i] = 0; }
         if (inventory == null || atlas == null) {
             if (iconMesh != null) { iconMesh.cleanup(); iconMesh = null; }
             return;
@@ -278,14 +301,27 @@ public class Hotbar {
         for (int i = 0; i < SLOTS; i++) {
             BlockType type = inventory.getType(i);
             if (type == null) continue;
-            countVal[i] = inventory.getCount(i);
 
             int x0 = slotsX + i * (SLOT_SIZE + SLOT_SEP);
             float cx = x0 + SLOT_SIZE / 2f;
             float cy = slotsY + SLOT_SIZE / 2f;
-            // Bottom-right anchor for the stack count (right-aligned at draw time)
-            countPos[i][0] = x0 + SLOT_SIZE - 3;
-            countPos[i][1] = slotsY + SLOT_SIZE - 2;
+
+            if (Tools.isTool(type)) {
+                // MC shows the bar only once the tool has actually been used
+                int dur = inventory.getDurability(i);
+                if (dur < Tools.maxDurability(type)) {
+                    durPos[i][0] = x0 + 3;
+                    durPos[i][1] = slotsY + SLOT_SIZE - 5;
+                    durPos[i][2] = SLOT_SIZE - 6;
+                    durVal[i] = dur;
+                    durMax[i] = Tools.maxDurability(type);
+                }
+            } else {
+                countVal[i] = inventory.getCount(i);
+                // Bottom-right anchor for the stack count (right-aligned at draw time)
+                countPos[i][0] = x0 + SLOT_SIZE - 3;
+                countPos[i][1] = slotsY + SLOT_SIZE - 2;
+            }
 
             // scaled up briefly by the pickup pop (grows ~1.3x, eases back)
             float s  = 17f * inventory.popScale(i); // block half-width
@@ -401,6 +437,34 @@ public class Hotbar {
         });
     }
 
+    /** MC-style durability bar: dark track + green→yellow→red fill. */
+    private void drawDurabilityBar(int x0, int y1, int width, int durability, int maxDurability) {
+        int barH = 3;
+        int y0 = y1 - barH;
+        drawColoredRect(x0, y0, x0 + width, y1, durBarBg);
+        if (maxDurability <= 0) return;
+        float frac = Math.max(0f, Math.min(1f, durability / (float) maxDurability));
+        int fillW = Math.round(width * frac);
+        if (fillW <= 0) return;
+        Texture fill = frac > 0.6f ? durBarGreen : frac > 0.25f ? durBarYellow : durBarRed;
+        drawColoredRect(x0, y0, x0 + fillW, y1, fill);
+    }
+
+    private void drawColoredRect(int x0, int y0, int x1, int y1, Texture tex) {
+        iconShader.use();
+        iconShader.setUniform("uProjection", projection);
+        iconShader.setUniform("uTexture", 0);
+        tex.bind(0);
+        labelMesh.upload(new float[]{
+            x0, y0, 0, 0, 1, 1,
+            x1, y0, 0, 1, 1, 1,
+            x1, y1, 0, 1, 0, 1,
+            x0, y1, 0, 0, 0, 1,
+        }, new int[]{0, 1, 2, 2, 3, 0});
+        labelMesh.render();
+        iconShader.detach();
+    }
+
     /**
      * One solid quad. Vertex layout: [x, y, z, alpha(u), 0(v), brightness(light)].
      * ui.frag: fragColor = vec4(brightness, brightness, brightness, u).
@@ -421,6 +485,10 @@ public class Hotbar {
         if (shader       != null) shader.cleanup();
         if (iconShader   != null) iconShader.cleanup();
         if (whiteTexture != null) whiteTexture.cleanup();
+        durBarBg.cleanup();
+        durBarGreen.cleanup();
+        durBarYellow.cleanup();
+        durBarRed.cleanup();
         if (mesh         != null) mesh.cleanup();
         if (iconMesh     != null) iconMesh.cleanup();
         for (Label l : countTex.values()) l.tex().cleanup();

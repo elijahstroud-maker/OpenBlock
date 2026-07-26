@@ -234,6 +234,12 @@ public class Renderer {
         // 2a''. The player's own body — visible in the third-person cameras
         if (cameraMode != 0) playerModel.render(projection, view, player, ambient, frameDt);
 
+        // 2a'''. Clouds — alpha-blended against the depth buffer, and drawn
+        // BEFORE the particles/outline passes: those don't write depth, so
+        // clouds drawn later would blend over chips and outlines seen against
+        // the sky.
+        clouds.render(projection, view, fogColor, ambient, fogStart, fogEnd);
+
         // 2a'. Block-crack particles (break bursts + mining chips) — before the
         // water pass so chips from underwater mining aren't depth-culled
         if (frameDt > 0f) blockParticles.update(world, frameDt);
@@ -279,9 +285,6 @@ public class Renderer {
         glEnable(GL_CULL_FACE);
         glDisable(GL_BLEND);
         shader.detach();
-
-        // 3. Clouds (alpha-blended, rendered before outline so clouds can occlude it)
-        clouds.render(projection, view, fogColor, ambient, fogStart, fogEnd);
 
         // 3b. Rain/snow curtains around the player (skipped underwater — the
         // surface is the roof). Above the snow line the same storm falls as snow,

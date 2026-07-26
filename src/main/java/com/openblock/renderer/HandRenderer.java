@@ -115,10 +115,17 @@ public class HandRenderer {
                  .rotateX((float) Math.toRadians(sqrtSin * -80.0))
                  .scale(0.4f);
             if (shownType.item) {
-                // MC's builtin/generated first-person item pose: sprite faces
-                // the camera, tilted 25°, raised and enlarged
-                model.translate(0f, 0.2f, 0f)
-                     .rotateY((float) Math.toRadians(-45.0)) // cancel the base 45 — face the view
+                // Item first-person pose, MC's look: raised out of the fist,
+                // slight net yaw (45 - 70 = -25°) so the face still reads,
+                // pitched 30° back so the TOP of the tool leans away into the
+                // screen (the tip — texture top-right — points up-right and
+                // recedes), rolled 25° so it stands near-upright out of the
+                // fist. Net scale 0.4 * 1.7 = 0.68, MC's held-item size.
+                // Net yaw -75° (45 base - 120): steeply angled across the view
+                // like MC — mostly edge with a sliver of face. No X-pitch (it
+                // reads "flat"). Roll 25° stands the tool upright.
+                model.translate(0f, 7f / 16f, 2f / 16f)
+                     .rotateY((float) Math.toRadians(-120.0))
                      .rotateZ((float) Math.toRadians(25.0))
                      .scale(1.7f);
             }

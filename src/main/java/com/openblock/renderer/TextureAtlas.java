@@ -27,8 +27,8 @@ import static org.lwjgl.stb.STBImage.stbi_image_free;
  */
 public class TextureAtlas {
     public static final int TILE_SIZE   = 16;
-    public static final int TILE_COUNT  = 24; // tiles in one row
-    public static final int ATLAS_W     = TILE_SIZE * TILE_COUNT; // 304
+    public static final int TILE_COUNT  = 66; // tiles in one row
+    public static final int ATLAS_W     = TILE_SIZE * TILE_COUNT; // 1056
     public static final int ATLAS_H     = TILE_SIZE;               // 16
 
     private final Texture texture;
@@ -49,6 +49,17 @@ public class TextureAtlas {
 
     // Maps (BlockType, Face) → tile column index
     private static final Map<Long, Integer> TILE_MAP = new HashMap<>();
+
+    /** Tool tiles 46-65. Atlas column = TOOL_TILE_BASE + index; the texture
+     *  is /textures/item/&lt;enum name lowercased&gt;.png. */
+    private static final int TOOL_TILE_BASE = 46;
+    private static final BlockType[] TOOL_TILES = {
+        BlockType.WOODEN_PICKAXE,  BlockType.WOODEN_AXE,  BlockType.WOODEN_SWORD,  BlockType.WOODEN_HOE,
+        BlockType.STONE_PICKAXE,   BlockType.STONE_AXE,   BlockType.STONE_SWORD,   BlockType.STONE_HOE,
+        BlockType.IRON_PICKAXE,    BlockType.IRON_AXE,    BlockType.IRON_SWORD,    BlockType.IRON_HOE,
+        BlockType.GOLDEN_PICKAXE,  BlockType.GOLDEN_AXE,  BlockType.GOLDEN_SWORD,  BlockType.GOLDEN_HOE,
+        BlockType.DIAMOND_PICKAXE, BlockType.DIAMOND_AXE, BlockType.DIAMOND_SWORD, BlockType.DIAMOND_HOE,
+    };
 
     static {
         // Face ordinals: TOP=0 BOTTOM=1 NORTH=2 SOUTH=3 EAST=4 WEST=5
@@ -107,6 +118,46 @@ public class TextureAtlas {
         set(BlockType.CRAFTING_TABLE, Face.EAST,   21); // side
         set(BlockType.CRAFTING_TABLE, Face.WEST,   21);
         for (Face f : Face.values()) set(BlockType.STICK, f, 23); // flat item sprite
+
+        // Ores (tiles 24-31) + their drop items (tiles 32-36)
+        for (Face f : Face.values()) set(BlockType.COAL_ORE,     f, 24);
+        for (Face f : Face.values()) set(BlockType.IRON_ORE,     f, 25);
+        for (Face f : Face.values()) set(BlockType.COPPER_ORE,   f, 26);
+        for (Face f : Face.values()) set(BlockType.GOLD_ORE,     f, 27);
+        for (Face f : Face.values()) set(BlockType.LAPIS_ORE,    f, 28);
+        for (Face f : Face.values()) set(BlockType.REDSTONE_ORE, f, 29);
+        for (Face f : Face.values()) set(BlockType.DIAMOND_ORE,  f, 30);
+        for (Face f : Face.values()) set(BlockType.EMERALD_ORE,  f, 31);
+        for (Face f : Face.values()) set(BlockType.COAL,         f, 32);
+        for (Face f : Face.values()) set(BlockType.LAPIS_LAZULI, f, 33);
+        for (Face f : Face.values()) set(BlockType.REDSTONE,     f, 34);
+        for (Face f : Face.values()) set(BlockType.DIAMOND,      f, 35);
+        for (Face f : Face.values()) set(BlockType.EMERALD,      f, 36);
+
+        // Furnace (tiles 37-40): unlit front, side, top, lit front
+        set(BlockType.FURNACE, Face.TOP,    39);
+        set(BlockType.FURNACE, Face.BOTTOM, 39);
+        set(BlockType.FURNACE, Face.NORTH,  37); // front
+        set(BlockType.FURNACE, Face.SOUTH,  37);
+        set(BlockType.FURNACE, Face.EAST,   38); // side
+        set(BlockType.FURNACE, Face.WEST,   38);
+        set(BlockType.FURNACE_LIT, Face.TOP,    39);
+        set(BlockType.FURNACE_LIT, Face.BOTTOM, 39);
+        set(BlockType.FURNACE_LIT, Face.NORTH,  40); // glowing front
+        set(BlockType.FURNACE_LIT, Face.SOUTH,  40);
+        set(BlockType.FURNACE_LIT, Face.EAST,   38);
+        set(BlockType.FURNACE_LIT, Face.WEST,   38);
+        for (Face f : Face.values()) set(BlockType.GLASS,        f, 41);
+        for (Face f : Face.values()) set(BlockType.IRON_INGOT,   f, 42);
+        for (Face f : Face.values()) set(BlockType.GOLD_INGOT,   f, 43);
+        for (Face f : Face.values()) set(BlockType.COPPER_INGOT, f, 44);
+        for (Face f : Face.values()) set(BlockType.CHARCOAL,     f, 45);
+
+        // Tools: one column each starting at TOOL_TILE_BASE, in TOOL_TILES
+        // order — the same array buildAtlas blits from, so the mapping and
+        // the pixels can never drift apart.
+        for (int i = 0; i < TOOL_TILES.length; i++)
+            for (Face f : Face.values()) set(TOOL_TILES[i], f, TOOL_TILE_BASE + i);
     }
 
     private static void set(BlockType bt, Face f, int col) {
@@ -246,6 +297,41 @@ public class TextureAtlas {
         // Tile 23: stick (item sprite — transparency matters, don't force opaque)
         if (!blitResource(buf, 23, "/textures/item/stick.png"))
             fillTile(buf, 23, 0x6B, 0x43, 0x1D, 0xFF);
+        // Tiles 24-31: ore blocks
+        String[] ores = {"coal", "iron", "copper", "gold", "lapis", "redstone", "diamond", "emerald"};
+        for (int i = 0; i < ores.length; i++) {
+            if (!blitResource(buf, 24 + i, "/textures/" + ores[i] + "_ore.png"))
+                fillTileStone(buf, 24 + i);
+        }
+        // Tiles 32-36: ore drop items (sprites, keep transparency)
+        String[] drops = {"coal", "lapis_lazuli", "redstone", "diamond", "emerald"};
+        for (int i = 0; i < drops.length; i++) {
+            if (!blitResource(buf, 32 + i, "/textures/item/" + drops[i] + ".png"))
+                fillTile(buf, 32 + i, 0xFF, 0x00, 0xFF, 0xFF);
+        }
+        // Tiles 37-40: furnace (front, side, top, lit front); tile 41: glass
+        String[] furn = {"furnace_front", "furnace_side", "furnace_top", "furnace_front_on"};
+        for (int i = 0; i < furn.length; i++) {
+            if (!blitResource(buf, 37 + i, "/textures/" + furn[i] + ".png"))
+                fillTileStone(buf, 37 + i);
+        }
+        if (!blitResource(buf, 41, "/textures/glass.png"))
+            fillTile(buf, 41, 0xC0, 0xE8, 0xF0, 0x60);
+        // Tiles 42-44: smelted ingots (sprites, keep transparency)
+        String[] ingots = {"iron_ingot", "gold_ingot", "copper_ingot"};
+        for (int i = 0; i < ingots.length; i++) {
+            if (!blitResource(buf, 42 + i, "/textures/item/" + ingots[i] + ".png"))
+                fillTile(buf, 42 + i, 0xFF, 0x00, 0xFF, 0xFF);
+        }
+        // Tile 45: charcoal
+        if (!blitResource(buf, 45, "/textures/item/charcoal.png"))
+            fillTile(buf, 45, 0x33, 0x28, 0x20, 0xFF);
+        // Tiles 46-65: tools, straight from the TOOL_TILES mapping order
+        for (int i = 0; i < TOOL_TILES.length; i++) {
+            String path = "/textures/item/" + TOOL_TILES[i].name().toLowerCase() + ".png";
+            if (!blitResource(buf, TOOL_TILE_BASE + i, path))
+                fillTile(buf, TOOL_TILE_BASE + i, 0xFF, 0x00, 0xFF, 0xFF);
+        }
 
         buf.flip();
         return buf;

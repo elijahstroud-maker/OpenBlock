@@ -3,6 +3,7 @@ package com.openblock.renderer;
 import com.openblock.input.InputHandler;
 import com.openblock.player.Player;
 import com.openblock.weather.Weather;
+import com.openblock.world.World;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryUtil;
 
@@ -54,6 +55,13 @@ public class ChatOverlay {
     private final Mesh quadMesh = new Mesh(); // reused for every textured/solid quad
 
     private final StringBuilder buffer = new StringBuilder();
+    /** Previously sent lines, oldest first — recalled with the up/down arrows. */
+    private final java.util.List<String> history = new java.util.ArrayList<>();
+    private static final int MAX_HISTORY = 50;
+    /** Index into history while browsing; history.size() = editing a fresh line. */
+    private int historyPos = 0;
+    /** The unsent line stashed when up-arrow starts browsing, restored by down. */
+    private String draft = "";
     private boolean open = false;
     /** Blocks the game's ESC-to-quit for a moment after ESC closed the chat. */
     private float escCooldown = 0f;
@@ -74,7 +82,7 @@ public class ChatOverlay {
     public boolean escRecentlyUsed() { return escCooldown > 0f; }
 
     public void update(InputHandler input, float delta, Player player, Weather weather,
-                       DayNightCycle dayNight) {
+                       DayNightCycle dayNight, World world) {
         if (escCooldown > 0f) escCooldown -= delta;
         cursorBlink += delta;
         for (Message m : messages) m.age += delta;
@@ -95,6 +103,20 @@ public class ChatOverlay {
         if (input.isKeyJustPressed(GLFW_KEY_BACKSPACE) && buffer.length() > 0) {
             buffer.setLength(buffer.length() - 1);
         }
+        // Up/down arrows walk the sent-message history, like MC. Up steps to
+        // older lines (stashing the in-progress draft first); down steps back
+        // toward newer ones and finally restores the draft.
+        if (input.isKeyJustPressed(GLFW_KEY_UP) && historyPos > 0) {
+            if (historyPos == history.size()) draft = buffer.toString();
+            historyPos--;
+            buffer.setLength(0);
+            buffer.append(history.get(historyPos));
+        }
+        if (input.isKeyJustPressed(GLFW_KEY_DOWN) && historyPos < history.size()) {
+            historyPos++;
+            buffer.setLength(0);
+            buffer.append(historyPos == history.size() ? draft : history.get(historyPos));
+        }
         if (input.isKeyJustPressed(GLFW_KEY_ESCAPE)) {
             close(input);
             escCooldown = 0.4f;
@@ -103,7 +125,14 @@ public class ChatOverlay {
         if (input.isKeyJustPressed(GLFW_KEY_ENTER) || input.isKeyJustPressed(GLFW_KEY_KP_ENTER)) {
             String text = buffer.toString().trim();
             close(input);
-            if (!text.isEmpty()) submit(text, player, weather, dayNight);
+            if (!text.isEmpty()) {
+                // Skip the history entry if it's a repeat of the last line (MC rule)
+                if (history.isEmpty() || !history.get(history.size() - 1).equals(text)) {
+                    history.add(text);
+                    if (history.size() > MAX_HISTORY) history.remove(0);
+                }
+                submit(text, player, weather, dayNight, world);
+            }
         }
     }
 
@@ -111,6 +140,8 @@ public class ChatOverlay {
         open = true;
         buffer.setLength(0);
         buffer.append(prefill);
+        historyPos = history.size();
+        draft = "";
         cursorBlink = 0f;
         input.setTextMode(true); // also drops the 't'/'/' char that opened us
     }
@@ -126,7 +157,8 @@ public class ChatOverlay {
         if (open) close(input);
     }
 
-    private void submit(String text, Player player, Weather weather, DayNightCycle dayNight) {
+    private void submit(String text, Player player, Weather weather, DayNightCycle dayNight,
+                        World world) {
         if (!text.startsWith("/")) {
             addMessage("<Player> " + text);
             return;
@@ -136,8 +168,17 @@ public class ChatOverlay {
             addMessage("Commands:");
             addMessage("  /help - show this list");
             addMessage("  /admin - toggle invincibility + instant breaking");
+            addMessage("  /admin xray - see through natural blocks to the ores (admin only)");
             addMessage("  /weather clear|rain - change the weather");
             addMessage("  /time day|night - jump to midday or midnight");
+        } else if (lower.equals("/admin xray")) {
+            if (!player.isAdminMode()) {
+                addMessage("X-ray needs admin mode - use /admin first");
+            } else {
+                boolean on = !world.isXray();
+                world.setXray(on);
+                addMessage("X-ray " + (on ? "enabled" : "disabled"));
+            }
         } else if (lower.equals("/time") || lower.startsWith("/time ")) {
             String arg = lower.equals("/time") ? "" : lower.substring("/time ".length()).trim();
             switch (arg) {
@@ -148,6 +189,11 @@ public class ChatOverlay {
         } else if (lower.equals("/admin")) {
             boolean on = player.toggleAdmin();
             addMessage("Admin mode " + (on ? "enabled" : "disabled"));
+            // X-ray is an admin power — leaving admin mode always shuts it off
+            if (!on && world.isXray()) {
+                world.setXray(false);
+                addMessage("X-ray disabled");
+            }
         } else if (lower.equals("/weather") || lower.startsWith("/weather ")) {
             String arg = lower.equals("/weather") ? "" : lower.substring("/weather ".length()).trim();
             switch (arg) {

@@ -360,7 +360,10 @@ public class SoundManager {
 
     private String categoryFor(BlockType block) {
         return switch (block) {
-            case STONE, COBBLESTONE, BEDROCK -> "stone";
+            case STONE, COBBLESTONE, BEDROCK,
+                 COAL_ORE, IRON_ORE, COPPER_ORE, GOLD_ORE,
+                 LAPIS_ORE, REDSTONE_ORE, DIAMOND_ORE, EMERALD_ORE,
+                 FURNACE, FURNACE_LIT, GLASS -> "stone"; // no glass shatter sound yet
             case SAND           -> "sand";
             case SNOW_GRASS     -> "snow";
             case LOG, PLANKS, CRAFTING_TABLE -> "wood";
@@ -372,7 +375,10 @@ public class SoundManager {
     /** Break sounds: snow blocks use grass (dirt) sound, not snow crunch. */
     private String breakCategoryFor(BlockType block) {
         return switch (block) {
-            case STONE, COBBLESTONE, BEDROCK -> "stone";
+            case STONE, COBBLESTONE, BEDROCK,
+                 COAL_ORE, IRON_ORE, COPPER_ORE, GOLD_ORE,
+                 LAPIS_ORE, REDSTONE_ORE, DIAMOND_ORE, EMERALD_ORE,
+                 FURNACE, FURNACE_LIT, GLASS -> "stone"; // no glass shatter sound yet
             case SAND           -> "sand";
             case LOG, PLANKS, CRAFTING_TABLE -> "wood";
             case GRAVEL         -> "gravel";

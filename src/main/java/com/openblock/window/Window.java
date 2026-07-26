@@ -26,11 +26,17 @@ public class Window {
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
-        // Fullscreen at the monitor's native resolution
-        long monitor = glfwGetPrimaryMonitor();
-        GLFWVidMode vidMode = glfwGetVideoMode(monitor);
-        this.width  = vidMode != null ? vidMode.width()  : width;
-        this.height = vidMode != null ? vidMode.height() : height;
+        // Fullscreen at the monitor's native resolution — or a plain window
+        // at the requested size in --dev mode
+        long monitor = com.openblock.Main.dev ? NULL : glfwGetPrimaryMonitor();
+        GLFWVidMode vidMode = glfwGetVideoMode(glfwGetPrimaryMonitor());
+        if (monitor != NULL && vidMode != null) {
+            this.width  = vidMode.width();
+            this.height = vidMode.height();
+        } else {
+            this.width  = width;
+            this.height = height;
+        }
 
         handle = glfwCreateWindow(this.width, this.height, title, monitor, NULL);
         if (handle == NULL) {

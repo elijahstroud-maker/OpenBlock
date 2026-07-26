@@ -3,6 +3,8 @@ package com.openblock.terrain;
 import com.openblock.world.BlockType;
 import com.openblock.world.Chunk;
 
+import java.util.Random;
+
 public class TerrainGenerator {
 
     // Trees: canopy extends 2 blocks from trunk; min spacing between trunks
@@ -158,6 +160,8 @@ public class TerrainGenerator {
             }
         }
 
+        generateOres(chunk);
+
         // Trees: iterate with canopy-overlap ring; cactus only needs column itself
         for (int lx = -TREE_CHECK_RADIUS; lx < Chunk.SIZE_X + TREE_CHECK_RADIUS; lx++) {
             for (int lz = -TREE_CHECK_RADIUS; lz < Chunk.SIZE_Z + TREE_CHECK_RADIUS; lz++) {
@@ -200,6 +204,133 @@ public class TerrainGenerator {
         }
 
         chunk.generated = true;
+    }
+
+    // ---------- ore generation (MC 1.8's per-chunk population) ----------
+
+    /**
+     * Ore veins, Minecraft-style. For seamless veins across chunk borders,
+     * every chunk replays the deterministic vein set of itself AND its 8
+     * neighbors, carving only the cells that land inside this chunk — so a
+     * vein straddling a border is completed identically by both chunks.
+     *
+     * Per-chunk population (veins x size x depth band, MC 1.8's table):
+     *   coal     20 x 17   y 0-128   (reaches mountain cliffs)
+     *   iron     20 x 9    y 0-64    + 3 x 9 at y 64-120 (mountain iron, rarer)
+     *   copper    8 x 9    y 40-75   (mid-level, modern-MC style)
+     *   gold      2 x 9    y 0-32
+     *   redstone  8 x 8    y 0-16
+     *   diamond   1 x 8    y 0-16
+     *   lapis     1 x 7    y 0-30, triangular around y 16
+     *   emerald   3-8 lone blocks y 4-32, ONLY under mountains (height >= 95)
+     */
+    private void generateOres(Chunk chunk) {
+        for (int dcx = -1; dcx <= 1; dcx++) {
+            for (int dcz = -1; dcz <= 1; dcz++) {
+                int cx = chunk.getChunkX() + dcx;
+                int cz = chunk.getChunkZ() + dcz;
+                Random rand = new Random(seed ^ (cx * 341873128712L + cz * 132897987541L));
+                int baseX = cx * Chunk.SIZE_X;
+                int baseZ = cz * Chunk.SIZE_Z;
+
+                veins(chunk, rand, baseX, baseZ, BlockType.COAL_ORE,     20, 17,  0, 128);
+                veins(chunk, rand, baseX, baseZ, BlockType.IRON_ORE,     20,  9,  0,  64);
+                veins(chunk, rand, baseX, baseZ, BlockType.IRON_ORE,      3,  9, 64, 120);
+                veins(chunk, rand, baseX, baseZ, BlockType.COPPER_ORE,    8,  9, 40,  75);
+                veins(chunk, rand, baseX, baseZ, BlockType.GOLD_ORE,      2,  9,  0,  32);
+                veins(chunk, rand, baseX, baseZ, BlockType.REDSTONE_ORE,  8,  8,  0,  16);
+                veins(chunk, rand, baseX, baseZ, BlockType.DIAMOND_ORE,   1,  8,  0,  16);
+
+                // Lapis: MC's triangular depth spread centered on y 16
+                {
+                    int x = baseX + rand.nextInt(16);
+                    int y = 1 + rand.nextInt(15) + rand.nextInt(15);
+                    int z = baseZ + rand.nextInt(16);
+                    placeVein(chunk, rand, x, y, z, 7, BlockType.LAPIS_ORE);
+                }
+
+                // Emerald: extreme-hills-only lone blocks (MC 1.8: 3-8 singles,
+                // y 4-32). "Under mountains" = the chunk's center column is
+                // mountainous. Runs last so the conditional never desyncs the
+                // shared random sequence for the ores above.
+                if (computeHeight(baseX + 8, baseZ + 8) >= 95) {
+                    int count = 3 + rand.nextInt(6);
+                    for (int i = 0; i < count; i++) {
+                        placeOre(chunk, baseX + rand.nextInt(16),
+                                 4 + rand.nextInt(28),
+                                 baseZ + rand.nextInt(16), BlockType.EMERALD_ORE);
+                    }
+                }
+            }
+        }
+    }
+
+    private void veins(Chunk chunk, Random rand, int baseX, int baseZ, BlockType ore,
+                       int count, int size, int minY, int maxY) {
+        for (int i = 0; i < count; i++) {
+            int x = baseX + rand.nextInt(16);
+            int y = minY + rand.nextInt(maxY - minY);
+            int z = baseZ + rand.nextInt(16);
+            placeVein(chunk, rand, x, y, z, size, ore);
+        }
+    }
+
+    /**
+     * One vein, Minecraft's WorldGenMinable shape: a short line segment at a
+     * random angle, with overlapping ellipsoids strung along it whose radius
+     * swells in the middle (sin bulge) — the classic streaky ore pocket.
+     * Only replaces STONE, so veins never bleed into dirt or cave air.
+     */
+    private void placeVein(Chunk chunk, Random rand, double cx, double cy, double cz,
+                           int size, BlockType ore) {
+        float angle = rand.nextFloat() * (float) Math.PI;
+        double x1 = cx + Math.sin(angle) * size / 8.0;
+        double x2 = cx - Math.sin(angle) * size / 8.0;
+        double z1 = cz + Math.cos(angle) * size / 8.0;
+        double z2 = cz - Math.cos(angle) * size / 8.0;
+        double y1 = cy + rand.nextInt(3) - 2;
+        double y2 = cy + rand.nextInt(3) - 2;
+
+        for (int i = 0; i < size; i++) {
+            double t  = (double) i / size;
+            double xC = x1 + (x2 - x1) * t;
+            double yC = y1 + (y2 - y1) * t;
+            double zC = z1 + (z2 - z1) * t;
+            double d  = rand.nextDouble() * size / 16.0;
+            // MC: d10 = (sin(pi*t)+1)*d + 1 is the DIAMETER (min 1 block, so
+            // every step lands ~1 ore), tested against d10/2 — radius = /2.
+            // (/4 was tried once: veins shrank to 0-2 blocks. Don't.)
+            double radius = ((Math.sin(Math.PI * t) + 1.0) * d + 1.0) / 2.0;
+
+            int minX = (int) Math.floor(xC - radius), maxX = (int) Math.floor(xC + radius);
+            int minY = (int) Math.floor(yC - radius), maxY = (int) Math.floor(yC + radius);
+            int minZ = (int) Math.floor(zC - radius), maxZ = (int) Math.floor(zC + radius);
+            for (int bx = minX; bx <= maxX; bx++) {
+                double dx = (bx + 0.5 - xC) / radius;
+                if (dx * dx >= 1) continue;
+                for (int by = minY; by <= maxY; by++) {
+                    double dy = (by + 0.5 - yC) / radius;
+                    if (dx * dx + dy * dy >= 1) continue;
+                    for (int bz = minZ; bz <= maxZ; bz++) {
+                        double dz = (bz + 0.5 - zC) / radius;
+                        if (dx * dx + dy * dy + dz * dz < 1) {
+                            placeOre(chunk, bx, by, bz, ore);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Writes one ore cell if it falls inside this chunk and is currently stone. */
+    private void placeOre(Chunk chunk, int wx, int wy, int wz, BlockType ore) {
+        int lx = wx - chunk.getWorldX();
+        int lz = wz - chunk.getWorldZ();
+        if (lx < 0 || lx >= Chunk.SIZE_X || lz < 0 || lz >= Chunk.SIZE_Z) return;
+        if (wy < 1 || wy >= Chunk.SIZE_Y) return;
+        if (chunk.getBlock(lx, wy, lz) == BlockType.STONE) {
+            chunk.setBlock(lx, wy, lz, ore);
+        }
     }
 
     /** Full hash for a world column — bits 0-4 decide spawn, higher bits drive shape. */

@@ -19,6 +19,11 @@ import static org.lwjgl.opengl.GL30.*;
  * the overlap is invisible — one just overwrites the other cleanly.
  * No separate corner geometry is needed (corner cubes cause visible bumps).
  *
+ * The edge quads extend up to E+T (~2cm) into any neighboring block, so the
+ * vertex shader pulls the whole outline slightly toward the camera — without
+ * that, a block beside the targeted one depth-clips the shared edges and the
+ * outline looks thinner or partially "stuck" behind the neighbor.
+ *
  * 12 edges × 2 quads × 4 verts = 96 verts
  * 12 edges × 2 quads × 6 indices = 144 indices
  */
@@ -131,7 +136,8 @@ public class BlockOutlineRenderer {
 
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LEQUAL);
-        glDepthMask(false);
+        // Depth writes stay ON so the later water pass can't blend over the
+        // outline (ocean behind an outlined block tinted its edges blue)
         glEnable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(-3.0f, -3.0f);
         glDisable(GL_CULL_FACE);

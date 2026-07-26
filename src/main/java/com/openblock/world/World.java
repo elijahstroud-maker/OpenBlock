@@ -52,6 +52,9 @@ public class World {
     /** Dropped block items lying around the world. */
     private final List<ItemDrop> drops = new ArrayList<>();
 
+    /** State of every furnace the player has used, keyed by packed position. */
+    private final Map<Long, Furnace> furnaces = new HashMap<>();
+
     public World() {
         worldSeed = new java.util.Random().nextLong();
         generator = new TerrainGenerator(worldSeed);
@@ -101,24 +104,63 @@ public class World {
         processLeafDecay(delta);
         updateFallingBlocks(delta);
         updateDrops(delta);
+        updateFurnaces(delta);
         unloadDistantChunks(playerCX, playerCZ);
+    }
+
+    // ---------- furnaces ----------
+
+    private static long furnaceKey(int x, int y, int z) {
+        return ((x & 0x3FFFFFFL) << 38) | ((z & 0x3FFFFFFL) << 12) | (y & 0xFFFL);
+    }
+
+    /** The furnace state at this position, created on first use. */
+    public Furnace getFurnace(int x, int y, int z) {
+        return furnaces.computeIfAbsent(furnaceKey(x, y, z), k -> new Furnace(x, y, z));
+    }
+
+    /** Forgets a broken furnace and returns its state so the contents can drop. */
+    public Furnace removeFurnace(int x, int y, int z) {
+        return furnaces.remove(furnaceKey(x, y, z));
+    }
+
+    /** Furnaces smelt in real time whether or not their screen is open. */
+    private void updateFurnaces(float delta) {
+        for (Furnace f : furnaces.values()) {
+            boolean wasBurning = f.isBurning();
+            f.tick(delta);
+            if (f.isBurning() != wasBurning) {
+                // Swap the block for its lit/unlit twin (texture change only)
+                BlockType cur = getBlock(f.x, f.y, f.z);
+                if (cur == BlockType.FURNACE || cur == BlockType.FURNACE_LIT) {
+                    setBlock(f.x, f.y, f.z,
+                        f.isBurning() ? BlockType.FURNACE_LIT : BlockType.FURNACE);
+                }
+            }
+        }
     }
 
     // ---------- block particles (mining chips) ----------
 
     /**
-     * A block-particle request: a few mining chips popping off the face with
-     * normal (fx, fy, fz). Queued by gameplay code, drained by the renderer
-     * each frame.
+     * A block-particle request, queued by gameplay code and drained by the
+     * renderer each frame. Two kinds: a few mining chips popping off the face
+     * with normal (fx, fy, fz), or — when {@code burst} — the full
+     * block-destroyed explosion of chips from the whole block volume.
      */
     public record BlockParticles(BlockType type, int x, int y, int z,
-                                 int fx, int fy, int fz) { }
+                                 int fx, int fy, int fz, boolean burst) { }
 
     private final List<BlockParticles> particleEvents = new ArrayList<>();
 
     public void addBlockParticles(BlockType type, int x, int y, int z,
                                   int fx, int fy, int fz) {
-        particleEvents.add(new BlockParticles(type, x, y, z, fx, fy, fz));
+        particleEvents.add(new BlockParticles(type, x, y, z, fx, fy, fz, false));
+    }
+
+    /** Queues the block-destroyed particle burst (MC's 4x4x4 chip explosion). */
+    public void addBlockBreakBurst(BlockType type, int x, int y, int z) {
+        particleEvents.add(new BlockParticles(type, x, y, z, 0, 0, 0, true));
     }
 
     /** The pending particle events; the renderer clears this after spawning. */
@@ -187,8 +229,16 @@ public class World {
     /** Thrown drop carrying a whole stack (closing the inventory with items in hand). */
     public void spawnThrownDrop(BlockType type, int count, float x, float y, float z,
                                 float vx, float vy, float vz) {
+        spawnThrownDrop(type, count, 0, x, y, z, vx, vy, vz);
+    }
+
+    /** Same, but stamped with a tool's remaining durability. */
+    public void spawnThrownDrop(BlockType type, int count, int durability,
+                                float x, float y, float z,
+                                float vx, float vy, float vz) {
         ItemDrop d = new ItemDrop(type, x, y, z, vx, vy, vz);
         d.count = count;
+        d.durability = durability;
         drops.add(d);
     }
 
@@ -287,6 +337,17 @@ public class World {
             remeshIfMeshed(chunk.getChunkX(), chunk.getChunkZ() + 1);
         }
     }
+
+    /** Toggles x-ray debug rendering: every loaded chunk remeshes over the
+     *  next frames with natural blocks skipped so ores show through. */
+    public void setXray(boolean on) {
+        ChunkMesher.xray = on;
+        for (Chunk c : loadedChunks.values()) {
+            if (c.generated) c.dirty = true;
+        }
+    }
+
+    public boolean isXray() { return ChunkMesher.xray; }
 
     /** Marks a chunk dirty only if it already has a mesh built from stale neighbor data. */
     private void remeshIfMeshed(int cx, int cz) {

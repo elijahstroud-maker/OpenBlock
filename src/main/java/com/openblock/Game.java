@@ -71,7 +71,7 @@ public class Game {
         sounds.init();
 
         music = new MusicPlayer();
-        music.init();
+        music.init(audio);
 
         chat = new ChatOverlay();
         deathScreen = new DeathScreen();
@@ -79,6 +79,18 @@ public class Game {
 
         world = new World();
         player = new Player(world, input, sounds);
+        if (Main.dev) {
+            // Dev kit: one of each tool + building bits for quick testing
+            player.getInventory().add(com.openblock.world.BlockType.DIAMOND_PICKAXE);
+            player.getInventory().add(com.openblock.world.BlockType.DIAMOND_AXE);
+            player.getInventory().add(com.openblock.world.BlockType.DIAMOND_SWORD);
+            player.getInventory().add(com.openblock.world.BlockType.DIAMOND_HOE);
+            player.getInventory().add(com.openblock.world.BlockType.IRON_PICKAXE);
+            player.getInventory().add(com.openblock.world.BlockType.STICK);
+            player.getInventory().add(com.openblock.world.BlockType.IRON_INGOT);
+            for (int i = 0; i < 64; i++)
+                player.getInventory().add(com.openblock.world.BlockType.PLANKS);
+        }
         renderer.attachInventory(player.getInventory()); // hotbar shows the real slots
         // Find safe grassy spawn near origin, like Minecraft
         float[] spawn = world.findSafeSpawn();
@@ -166,7 +178,7 @@ public class Game {
                     openScreen(inv, InventoryScreen.Mode.PLAYER);
                 }
 
-                if (!inv.isOpen()) chat.update(input, delta, player, weather, dayNight);
+                if (!inv.isOpen()) chat.update(input, delta, player, weather, dayNight, world);
                 player.update(delta);
 
                 // Hold-to-mine; admin mode breaks one block per click instead.
@@ -181,6 +193,14 @@ public class Game {
                 // Right-clicked a crafting table: open its 3x3 GUI
                 if (player.popTableClicked() && !inv.isOpen()) {
                     openScreen(inv, InventoryScreen.Mode.TABLE);
+                }
+                // Right-clicked a furnace: open its GUI bound to that block
+                int[] furnacePos = player.popFurnaceClicked();
+                if (furnacePos != null && !inv.isOpen()) {
+                    inv.openFurnace(world.getFurnace(furnacePos[0], furnacePos[1], furnacePos[2]));
+                    input.setUiCapture(true);
+                    glfwSetInputMode(window.handle, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                    glfwSetCursorPos(window.handle, window.width / 2.0, window.height / 2.0);
                 }
             }
 

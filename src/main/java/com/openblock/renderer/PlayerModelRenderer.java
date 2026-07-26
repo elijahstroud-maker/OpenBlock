@@ -1,5 +1,6 @@
 package com.openblock.renderer;
 
+import com.openblock.crafting.Tools;
 import com.openblock.player.Player;
 import com.openblock.world.BlockType;
 import org.joml.Matrix4f;
@@ -88,13 +89,44 @@ public class PlayerModelRenderer {
         BlockType held = player.getInventory().getType(player.getInventory().getSelected());
         if (held != null) {
             model.rightArmMatrix(base, pose, handMatrix);
-            if (held.item) {
-                // Items are gripped like a tool: sprite sloping up-forward
-                // out of the fist, bigger than the mini block
-                handMatrix.translate(-1f, -10.5f, 2f)
-                          .rotateX((float) Math.toRadians(-50.0))
-                          .rotateZ((float) Math.toRadians(-10.0))
-                          .scale(8.5f);
+            if (held.item && (Tools.isTool(held) || held == BlockType.STICK)) {
+                // Tools (and sticks) are gripped like MC's handheld pose: the
+                // sprite's flat face turned sideways (normal pointing out from
+                // the body) so the side cameras see the tool, not its edge,
+                // and the texture diagonal pointing up-forward out of the fist
+                // (~35° above horizontal after the -10° roll); the texture's
+                // bottom-left grip pixel is anchored inside the fist (handle
+                // butt just behind the arm's front face) so the tool reads as
+                // held, and swings pivot at the handle. 14.5px = MC's 0.85
+                // block handheld third-person size.
+                // Per-tool grip anchor, read off each texture's actual handle:
+                // pick/axe/hoe handles run long and shallow — the fist sits
+                // well up the shaft (pixel ~(5,10)); the sword is gripped at
+                // its short handle just below the guard (pixel ~(2.5,13)).
+                // The anchor value g maps texture point (-g,-g) into the fist.
+                Tools.Info info = Tools.infoFor(held);
+                float grip = (info != null && info.type() == Tools.Type.SWORD) ? 0.34f
+                           : (info != null) ? 0.30f
+                           : 0.28f; // stick
+                handMatrix.translate(-1f, -9.8f, 0.5f)
+                          .rotateY((float) Math.toRadians(-90.0))
+                          .rotateZ((float) Math.toRadians(10.0))
+                          .scale(12f)
+                          .translate(grip, grip, 0f)
+                          // 180° about the handle diagonal: third person shows
+                          // the sprite's BACK face (like MC), so the axe blade
+                          // hangs off the correct side without touching the
+                          // texture the inventory and first person show. The
+                          // grip pixel lies on the axis, so the anchor holds.
+                          .rotate((float) Math.PI, 0.7071f, 0.7071f, 0f);
+            } else if (held.item) {
+                // Small items (ingots, gems, coal) lie flat in the palm, face
+                // up with the texture top pointing forward — MC's "generated"
+                // third-person pose.
+                handMatrix.translate(-1f, -9.5f, 2f)
+                          .rotateX((float) Math.toRadians(90.0))
+                          .rotateY((float) Math.toRadians(180.0))
+                          .scale(9.4f);
             } else {
                 handMatrix.translate(-1f, -12f, 1.5f)
                           .rotateY((float) Math.toRadians(45.0))

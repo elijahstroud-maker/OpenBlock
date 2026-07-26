@@ -25,12 +25,13 @@ final class ItemSpriteMesh {
 
     private ItemSpriteMesh() { }
 
-    /** Source PNG for each item type (alpha drives the extrusion). */
+    /**
+     * Source PNG for an item type (alpha drives the extrusion). Every item
+     * texture lives at /textures/item/&lt;enum name lowercased&gt;.png — the
+     * same rule TextureAtlas uses — so there's no per-type table to drift.
+     */
     private static String texturePath(BlockType type) {
-        return switch (type) {
-            case STICK -> "/textures/item/stick.png";
-            default    -> null;
-        };
+        return type.item ? "/textures/item/" + type.name().toLowerCase() + ".png" : null;
     }
 
     static Mesh build(TextureAtlas atlas, BlockType type) {

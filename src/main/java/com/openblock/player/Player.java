@@ -1,6 +1,7 @@
 package com.openblock.player;
 
 import com.openblock.audio.SoundManager;
+import com.openblock.crafting.Tools;
 import com.openblock.input.InputHandler;
 import com.openblock.world.BlockType;
 import com.openblock.world.Chunk;
@@ -103,6 +104,8 @@ public class Player {
     private float placeCooldown = 0f;
     /** Set when the player right-clicks a crafting table; Game opens the GUI. */
     private boolean tableClicked = false;
+    /** Position of a right-clicked furnace (Game opens its GUI), or null. */
+    private int[] furnaceClicked = null;
 
     // ---- First-person arm swing (punching/mining/placing) ----
     /** One full swing arc, MC's swing duration (6 ticks). */
@@ -460,10 +463,15 @@ public class Player {
 
     /** Tosses a whole stack out in front (inventory screen closed with items in hand). */
     public void tossItem(BlockType type, int count) {
+        tossItem(type, count, 0);
+    }
+
+    /** Same, but carrying a tool's current wear along with it. */
+    public void tossItem(BlockType type, int count, int durability) {
         if (type == null || count <= 0) return;
         Vector3f eye = camera.getPosition();
         Vector3f dir = camera.getFront();
-        world.spawnThrownDrop(type, count,
+        world.spawnThrownDrop(type, count, durability,
             eye.x + dir.x * 0.4f,
             eye.y - 0.3f + dir.y * 0.4f,
             eye.z + dir.z * 0.4f,
@@ -477,10 +485,11 @@ public class Player {
         int slot = inventory.getSelected();
         BlockType type = inventory.getType(slot);
         if (type == null) return;
+        int durability = inventory.getDurability(slot);
         inventory.consume(slot);
         Vector3f eye = camera.getPosition();
         Vector3f dir = camera.getFront();
-        world.spawnThrownDrop(type,
+        world.spawnThrownDrop(type, 1, durability,
             eye.x + dir.x * 0.4f,
             eye.y - 0.3f + dir.y * 0.4f, // launched from just below eye level
             eye.z + dir.z * 0.4f,
@@ -510,7 +519,7 @@ public class Player {
             if (Math.abs(d.pos.z - eyeZ) > HALF_W + 1.25f) continue;
             if (d.pos.y < foot - 0.75f || d.pos.y > foot + HEIGHT + 0.75f) continue;
             boolean got = false;
-            while (d.count > 0 && inventory.add(d.type)) {
+            while (d.count > 0 && inventory.add(d.type, d.durability)) {
                 d.count--;
                 got = true;
             }
@@ -759,22 +768,43 @@ public class Player {
     // ---------- timed block breaking ----------
 
     /**
-     * Seconds to break a block bare-handed — real Minecraft values:
-     * time = hardness x 1.5 (harvestable by hand) or x 5 (needs a tool).
-     * When tools arrive they should act as speed multipliers on these bases.
+     * Seconds to break a block, Minecraft's exact formula:
+     *   seconds = hardness * divisor * penalty / (20 * speed)
+     * The divisor is 30 when the held tool CAN harvest the block (so it drops)
+     * and 100 when it can't — bare hands on stone/ore, or a too-weak pickaxe.
+     * {@code speed} is the tool material's efficiency when it's the right type
+     * for the block (else 1, i.e. hand speed), and each mining penalty (head
+     * underwater, feet off the ground) multiplies the time by 5.
+     *
+     * Worked examples: stone by hand 1.5*100/20 = 7.5s (no drop); stone with a
+     * stone pickaxe 1.5*30/(20*4) = 0.56s; log with an iron axe 2.0*30/(20*6) =
+     * 0.5s; iron ore with a wood pickaxe 3.0*100/(20*2) = 7.5s (right type but
+     * too weak to harvest, so still the 100 divisor and no drop).
      */
-    private static float breakTime(BlockType b) {
+    private static float breakSeconds(BlockType block, BlockType tool, float penalty) {
+        float hardness = hardnessOf(block);
+        float speed    = Tools.speedMultiplier(block, tool);
+        float divisor  = Tools.canHarvest(block, tool) ? 30f : 100f;
+        return hardness * divisor * penalty / (20f * speed);
+    }
+
+    /** Block hardness, Minecraft's values. Bedrock (-1, unbreakable) is handled upstream. */
+    private static float hardnessOf(BlockType b) {
         return switch (b) {
-            case LEAVES               -> 0.30f; // hardness 0.2
-            case CACTUS               -> 0.60f; // hardness 0.4
-            case DIRT, SAND           -> 0.75f; // hardness 0.5
+            case LEAVES               -> 0.2f;
+            case CACTUS               -> 0.4f;
+            case DIRT, SAND           -> 0.5f;
             case GRASS, SNOW_GRASS,
-                 GRAVEL               -> 0.90f; // hardness 0.6
-            case LOG, PLANKS          -> 3.00f; // hardness 2.0, hand-harvestable
-            case CRAFTING_TABLE       -> 3.75f; // hardness 2.5, hand-harvestable
-            case STONE                -> 7.50f; // hardness 1.5 x5 — needs a pickaxe
-            case COBBLESTONE          -> 10.0f; // hardness 2.0 x5 — needs a pickaxe
-            default                   -> 1.00f;
+                 GRAVEL               -> 0.6f;
+            case GLASS                -> 0.3f;
+            case LOG, PLANKS          -> 2.0f;
+            case CRAFTING_TABLE       -> 2.5f;
+            case STONE                -> 1.5f;
+            case COBBLESTONE          -> 2.0f;
+            case FURNACE, FURNACE_LIT -> 3.5f;
+            case COAL_ORE, IRON_ORE, COPPER_ORE, GOLD_ORE,
+                 LAPIS_ORE, REDSTONE_ORE, DIAMOND_ORE, EMERALD_ORE -> 3.0f;
+            default                   -> 0.6f;
         };
     }
 
@@ -841,7 +871,11 @@ public class Player {
         float penalty = 1f;
         if (headUnderwater) penalty *= 5f;
         if (!onGround)      penalty *= 5f;
-        breakProgress += delta / (breakTime(block) * penalty);
+        // Tool-aware, Minecraft-exact break time (see breakSeconds): the right
+        // tool speeds mining by its material efficiency and, on tool-gated
+        // blocks, also switches the 100→30 divisor once it can actually harvest.
+        BlockType heldTool = inventory.getType(inventory.getSelected());
+        breakProgress += delta / breakSeconds(block, heldTool, penalty);
         hitSoundTimer -= delta;
         if (hitSoundTimer <= 0f) {
             sounds.playHit(block);
@@ -872,11 +906,40 @@ public class Player {
 
     private void breakNow(BlockType block) {
         sounds.playBreak(block);
+        // MC's destroy effect: the block shatters into a burst of chips
+        world.addBlockBreakBurst(block, breakTarget[0], breakTarget[1], breakTarget[2]);
         world.setBlock(breakTarget[0], breakTarget[1], breakTarget[2], BlockType.AIR);
+        // A broken furnace spills its contents (even in admin — they're the
+        // player's items, not a world drop)
+        if (block == BlockType.FURNACE || block == BlockType.FURNACE_LIT) {
+            com.openblock.world.Furnace f =
+                world.removeFurnace(breakTarget[0], breakTarget[1], breakTarget[2]);
+            if (f != null) {
+                for (int s = 0; s < 3; s++) {
+                    for (int i = 0; i < f.getCount(s); i++) {
+                        world.spawnDrop(f.getType(s),
+                            breakTarget[0], breakTarget[1], breakTarget[2]);
+                    }
+                }
+            }
+        }
         if (!adminMode) {
-            BlockType drop = dropFor(block);
+            BlockType heldTool = inventory.getType(inventory.getSelected());
+            // MC: mining a pickaxe-gated block (stone, ores, furnace) without
+            // an adequate pickaxe still breaks it — it just yields nothing.
+            BlockType drop = Tools.canHarvest(block, heldTool) ? dropFor(block) : null;
             if (drop != null) {
-                world.spawnDrop(drop, breakTarget[0], breakTarget[1], breakTarget[2]);
+                int n = dropCountFor(block);
+                for (int i = 0; i < n; i++) {
+                    // spawnDrop merges same-type drops in the cell into one pile
+                    world.spawnDrop(drop, breakTarget[0], breakTarget[1], breakTarget[2]);
+                }
+            }
+            // Every block broken wears the held tool (MC's rule: swords -2,
+            // hoes -0, other tools -1), whether or not it was the "right" tool
+            // for the job — creative/admin tools never take damage.
+            if (Tools.isTool(heldTool)) {
+                inventory.damageTool(inventory.getSelected(), Tools.breakDurabilityCost(heldTool));
             }
         }
         breakTarget   = null;
@@ -885,15 +948,33 @@ public class Player {
 
     /**
      * What a broken block drops (survival only; admin drops nothing).
-     * Minecraft rules: grass drops dirt, stone drops cobblestone (hand-mineable
-     * for now — no tools yet), leaves drop nothing (no saplings yet).
+     * Minecraft rules: grass drops dirt, stone drops cobblestone, leaves drop
+     * nothing (no saplings yet). Ores: coal/diamond/emerald/lapis/redstone
+     * drop their item; iron/gold/copper drop the ore block itself, to be
+     * smelted when furnaces arrive.
      */
     private static BlockType dropFor(BlockType block) {
         return switch (block) {
             case GRASS, SNOW_GRASS -> BlockType.DIRT;
             case STONE             -> BlockType.COBBLESTONE;
             case LEAVES            -> null;
+            case COAL_ORE          -> BlockType.COAL;
+            case DIAMOND_ORE       -> BlockType.DIAMOND;
+            case EMERALD_ORE       -> BlockType.EMERALD;
+            case LAPIS_ORE         -> BlockType.LAPIS_LAZULI;
+            case REDSTONE_ORE      -> BlockType.REDSTONE;
+            case FURNACE_LIT       -> BlockType.FURNACE; // lit twin drops the real block
+            case GLASS             -> null;              // MC: glass shatters, no drop
             default                -> block;
+        };
+    }
+
+    /** Drop counts (MC): lapis 4-8, redstone 4-5, everything else 1. */
+    private static int dropCountFor(BlockType block) {
+        return switch (block) {
+            case LAPIS_ORE    -> 4 + (int) (Math.random() * 5);
+            case REDSTONE_ORE -> 4 + (int) (Math.random() * 2);
+            default           -> 1;
         };
     }
 
@@ -901,6 +982,13 @@ public class Player {
     public boolean popTableClicked() {
         boolean v = tableClicked;
         tableClicked = false;
+        return v;
+    }
+
+    /** Furnace position clicked this tick (once), or null. */
+    public int[] popFurnaceClicked() {
+        int[] v = furnaceClicked;
+        furnaceClicked = null;
         return v;
     }
 
@@ -924,13 +1012,20 @@ public class Player {
         }
         if (!justClicked && placeCooldown > 0f) return;
 
-        // Right-clicking a crafting table opens its 3x3 GUI instead of
+        // Right-clicking a crafting table or furnace opens its GUI instead of
         // placing (MC: sneak + click to place a block against it instead)
         if (justClicked && !crouching) {
             int[] t = getTargetBlock();
-            if (t != null && world.getBlock(t[0], t[1], t[2]) == BlockType.CRAFTING_TABLE) {
-                tableClicked = true;
-                return;
+            if (t != null) {
+                BlockType tb = world.getBlock(t[0], t[1], t[2]);
+                if (tb == BlockType.CRAFTING_TABLE) {
+                    tableClicked = true;
+                    return;
+                }
+                if (tb == BlockType.FURNACE || tb == BlockType.FURNACE_LIT) {
+                    furnaceClicked = t;
+                    return;
+                }
             }
         }
 

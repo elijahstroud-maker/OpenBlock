@@ -1,7 +1,11 @@
 package com.openblock;
 
 public class Main {
+    /** --dev: windowed instead of fullscreen, spawn with a full tool kit. */
+    public static boolean dev = false;
+
     public static void main(String[] args) {
+        for (String a : args) if (a.equals("--dev")) dev = true;
         // Force AWT headless so BufferedImage/Graphics2D works without a native display
         System.setProperty("java.awt.headless", "true");
         new Game().run();

@@ -1,5 +1,7 @@
 package com.openblock.audio;
 
+import org.lwjgl.openal.AL;
+import org.lwjgl.openal.ALC;
 import org.lwjgl.stb.STBVorbis;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -13,6 +15,7 @@ import java.nio.file.Paths;
 import java.util.*;
 
 import static org.lwjgl.openal.AL10.*;
+import static org.lwjgl.openal.AL11.AL_SEC_OFFSET;
 
 /**
  * Plays background music from sounds/music/ using OpenAL + STB Vorbis.
@@ -21,7 +24,9 @@ import static org.lwjgl.openal.AL10.*;
  *  - Day tracks (all except "13 (Gold LP).ogg") shuffle randomly; every track
  *    plays once before the list repeats.
  *  - "13 (Gold LP).ogg" has a NIGHT_CHANCE probability of playing at night.
- *  - A random silence gap (45–210 s) separates tracks, like Minecraft.
+ *  - A random silence gap (45–210 s) separates tracks, like Minecraft — timed
+ *    from when a track actually ENDS, not when it starts.
+ *  - Each track fades in and out (~1s/1.5s) instead of cutting abruptly.
  */
 public class MusicPlayer {
 
@@ -30,6 +35,8 @@ public class MusicPlayer {
     private static final float  NIGHT_CHANCE = 0.30f;
     private static final float  MIN_DELAY    = 45f;
     private static final float  MAX_DELAY    = 210f;
+    private static final float  FADE_IN      = 1.0f;
+    private static final float  FADE_OUT     = 1.5f;
 
     private final List<String> dayTracks = new ArrayList<>();
     private final List<String> shuffled  = new ArrayList<>();
@@ -38,10 +45,25 @@ public class MusicPlayer {
     private float cooldown = 10f;
     private final Random rng = new Random();
 
+    /** Device handle so the playback thread can register its own AL capabilities
+     *  (LWJGL's AL/ALC capabilities are thread-local — a background thread that
+     *  never calls createCapabilities() has its AL10.* calls silently no-op,
+     *  which read as tracks "playing" for a beat and going nowhere). */
+    private long device = 0;
+
     private volatile boolean playing = false;
     private volatile int activeSource = 0;
 
     public void init() {
+        init(0);
+    }
+
+    public void init(AudioEngine engine) {
+        init(engine != null ? engine.getDevice() : 0);
+    }
+
+    private void init(long device) {
+        this.device = device;
         File dir = new File(MUSIC_DIR);
         if (dir.exists() && dir.isDirectory()) {
             File[] files = dir.listFiles((d, name) ->
@@ -78,12 +100,16 @@ public class MusicPlayer {
 
     private void playFile(String path) {
         playing = true;
-        resetCooldown();
 
         Thread t = new Thread(() -> {
             int source = 0;
             int buffer = 0;
             try {
+                // This thread's own AL capabilities — see the `device` field doc.
+                if (device != 0) {
+                    AL.createCapabilities(ALC.createCapabilities(device));
+                }
+
                 byte[] fileBytes = Files.readAllBytes(Paths.get(path));
                 ByteBuffer fileData = MemoryUtil.memAlloc(fileBytes.length);
                 fileData.put(fileBytes).flip();
@@ -101,6 +127,8 @@ public class MusicPlayer {
                 }
 
                 int format = (channels == 1) ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
+                float duration = channels > 0 && sampleRate > 0
+                    ? pcm.remaining() / (float) channels / sampleRate : 0f;
 
                 buffer = alGenBuffers();
                 alBufferData(buffer, format, pcm, sampleRate);
@@ -108,12 +136,23 @@ public class MusicPlayer {
 
                 source = alGenSources();
                 alSourcei(source, AL_BUFFER, buffer);
-                alSourcef(source, AL_GAIN, 1.0f);
+                alSourcef(source, AL_GAIN, 0f); // fades in below
                 alSourcePlay(source);
                 activeSource = source;
 
+                // Poll at a fine enough grain for a smooth fade; ease in over
+                // the first FADE_IN seconds and back out over the last
+                // FADE_OUT, driven by the source's own playback clock so it
+                // can't drift from what's actually audible.
                 while (alGetSourcei(source, AL_SOURCE_STATE) == AL_PLAYING) {
-                    Thread.sleep(200);
+                    float pos = alGetSourcef(source, AL_SEC_OFFSET);
+                    float gain = 1f;
+                    if (FADE_IN > 0f)  gain = Math.min(gain, pos / FADE_IN);
+                    if (duration > 0f && FADE_OUT > 0f) {
+                        gain = Math.min(gain, (duration - pos) / FADE_OUT);
+                    }
+                    alSourcef(source, AL_GAIN, Math.max(0f, Math.min(1f, gain)));
+                    Thread.sleep(50);
                 }
 
             } catch (Exception e) {
@@ -122,6 +161,12 @@ public class MusicPlayer {
                 activeSource = 0;
                 if (source != 0) alDeleteSources(source);
                 if (buffer != 0) alDeleteBuffers(buffer);
+                // Set the silence-gap cooldown BEFORE releasing `playing`: the
+                // main thread starts a new track the instant it observes
+                // playing==false, and `playing` is volatile, so writing
+                // cooldown first guarantees the main thread sees the fresh gap
+                // (not a stale, already-expired value) and actually waits.
+                resetCooldown();
                 playing = false;
             }
         }, "music-player");

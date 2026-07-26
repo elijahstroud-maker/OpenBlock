@@ -1,10 +1,13 @@
 package com.openblock.renderer;
 
 import com.openblock.crafting.Recipes;
+import com.openblock.crafting.Smelting;
+import com.openblock.crafting.Tools;
 import com.openblock.input.InputHandler;
 import com.openblock.player.Inventory;
 import com.openblock.player.Player;
 import com.openblock.world.BlockType;
+import com.openblock.world.Furnace;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryUtil;
 
@@ -66,13 +69,17 @@ public class InventoryScreen {
     private static final int ARMOR_BASE = 36;
     private static final int CRAFT_BASE = 40;  // 9 ids reserved; 2x2 uses the first 4
     private static final int RESULT_ID  = 49;
+    private static final int FURN_IN    = 50;  // furnace: smelting input
+    private static final int FURN_FUEL  = 51;  // furnace: fuel below the fire
+    private static final int FURN_OUT   = 52;  // furnace: take-only output
 
-    /** Which GUI this screen is showing: the survival inventory or a crafting table. */
-    public enum Mode { PLAYER, TABLE }
+    /** Which GUI this screen is showing: the survival inventory, a crafting table, or a furnace. */
+    public enum Mode { PLAYER, TABLE, FURNACE }
 
     /** {id, cellX, cellY} in MC GUI units — MC's exact GUI positions per mode. */
     private static final int[][] PLAYER_DEFS;
     private static final int[][] TABLE_DEFS;
+    private static final int[][] FURNACE_DEFS;
     static {
         ArrayList<int[]> defs = new ArrayList<>();
         for (int i = 0; i < 9; i++)                       // hotbar row
@@ -96,11 +103,23 @@ public class InventoryScreen {
                 defs.add(new int[]{CRAFT_BASE + r * 3 + c, 29 + 18 * c, 16 + 18 * r});
         defs.add(new int[]{RESULT_ID, 123, 34});          // table result (MC: 124,35)
         TABLE_DEFS = defs.toArray(new int[0][]);
+
+        defs.subList(shared, defs.size()).clear();        // furnace: MC's exact slots
+        defs.add(new int[]{FURN_IN,   56, 17});
+        defs.add(new int[]{FURN_FUEL, 56, 53});
+        defs.add(new int[]{FURN_OUT, 116, 35});
+        FURNACE_DEFS = defs.toArray(new int[0][]);
     }
 
     private Mode mode = Mode.PLAYER;
 
-    private int[][] defs() { return mode == Mode.PLAYER ? PLAYER_DEFS : TABLE_DEFS; }
+    private int[][] defs() {
+        return switch (mode) {
+            case PLAYER  -> PLAYER_DEFS;
+            case TABLE   -> TABLE_DEFS;
+            case FURNACE -> FURNACE_DEFS;
+        };
+    }
 
     /** Grid width of the active crafting area (2 for inventory, 3 for table). */
     private int craftW() { return mode == Mode.PLAYER ? 2 : 3; }
@@ -115,7 +134,12 @@ public class InventoryScreen {
     private final Texture skinTexture;       // steve.png — real player skin
     /** MC's empty-armor-slot silhouettes: helmet, chestplate, leggings, boots. */
     private final Texture[] armorIcons = new Texture[4];
+    /** Durability-bar swatches: dark backing track, green/yellow/red fill. */
+    private final Texture durBarBg, durBarGreen, durBarYellow, durBarRed;
     private final Texture craftingLabel; private final int craftingLabelW, craftingLabelH;
+    private final Texture furnaceLabel;  private final int furnaceLabelW, furnaceLabelH;
+    /** Furnace fire gauge: lit pixel-art flame + its dim burnt-out silhouette. */
+    private final Texture flameLit, flameDim;
     private final Matrix4f projection = new Matrix4f();
     private final Matrix4f previewProj  = new Matrix4f();
     private final Matrix4f previewView  = new Matrix4f();
@@ -131,10 +155,14 @@ public class InventoryScreen {
     private Inventory inventory;
     private TextureAtlas atlas;
     private boolean open = false;
+    /** The placed furnace whose slots this screen edits (FURNACE mode only). */
+    private Furnace furnace;
 
     // Stack held on the mouse cursor
     private BlockType cursorType  = null;
     private int       cursorCount = 0;
+    /** Remaining uses if the held stack is a tool (meaningless otherwise). */
+    private int       cursorDurability = 0;
 
     // Left drag-split state: slots painted over while the button is held
     private boolean leftDragging = false;
@@ -162,10 +190,19 @@ public class InventoryScreen {
         armorIcons[1] = new Texture("/textures/item/empty_armor_slot_chestplate.png");
         armorIcons[2] = new Texture("/textures/item/empty_armor_slot_leggings.png");
         armorIcons[3] = new Texture("/textures/item/empty_armor_slot_boots.png");
+        durBarBg     = solidTexture(0x00, 0x00, 0x00);
+        durBarGreen  = solidTexture(0x30, 0xE0, 0x30);
+        durBarYellow = solidTexture(0xE0, 0xC8, 0x20);
+        durBarRed    = solidTexture(0xE0, 0x30, 0x30);
         int[] wh = new int[2];
         craftingLabel = makeText("Crafting", 11, 2, wh);
         craftingLabelW = wh[0];
         craftingLabelH = wh[1];
+        furnaceLabel = makeText("Furnace", 11, 2, wh);
+        furnaceLabelW = wh[0];
+        furnaceLabelH = wh[1];
+        flameLit = makeFlame(true);
+        flameDim = makeFlame(false);
         previewPlayer = new PlayerModel();
     }
 
@@ -184,6 +221,13 @@ public class InventoryScreen {
         this.open = true;
     }
 
+    /** Opens a placed furnace's GUI, bound to that block's live state. */
+    public void openFurnace(Furnace furnace) {
+        this.furnace = furnace;
+        this.mode = Mode.FURNACE;
+        this.open = true;
+    }
+
     public Mode getMode() { return mode; }
 
     /**
@@ -197,22 +241,24 @@ public class InventoryScreen {
             int c = inventory.getCraftCount(i);
             if (t == null || c == 0) continue;
             inventory.setCraft(i, null, 0);
-            returnOrToss(player, t, c);
+            returnOrToss(player, t, c, 0); // craft-grid ingredients are never tools
         }
         if (cursorType != null && cursorCount > 0) {
-            returnOrToss(player, cursorType, cursorCount);
+            returnOrToss(player, cursorType, cursorCount, cursorDurability);
         }
         cursorType  = null;
         cursorCount = 0;
+        cursorDurability = 0;
         leftDragging  = false;
         rightDragging = false;
         dragSlots.clear();
         lastPickupSlot = -1;
+        furnace = null; // furnace slots keep their items — only the binding drops
     }
 
-    private void returnOrToss(Player player, BlockType type, int count) {
-        while (count > 0 && inventory.add(type)) count--;
-        if (count > 0) player.tossItem(type, count);
+    private void returnOrToss(Player player, BlockType type, int count, int durability) {
+        while (count > 0 && inventory.add(type, durability)) count--;
+        if (count > 0) player.tossItem(type, count, durability);
     }
 
     /** Handles slot clicks and all of MC's inventory shortcuts. Call each tick while open. */
@@ -233,11 +279,14 @@ public class InventoryScreen {
             // 1-9 swaps the hovered slot with that hotbar slot
             for (int i = 0; i < Inventory.HOTBAR_SIZE; i++) {
                 if (input.isKeyJustPressed(GLFW_KEY_1 + i)) {
+                    // The furnace output only gives — swap needs an empty hotbar slot
+                    if (id == FURN_OUT && inventory.getType(i) != null) break;
                     if (id != i) {
                         BlockType ht = inventory.getType(i);
                         int       hc = inventory.getCount(i);
-                        inventory.set(i, typeAt(id), countAt(id));
-                        setAt(id, ht, hc);
+                        int       hd = inventory.getDurability(i);
+                        inventory.set(i, typeAt(id), countAt(id), durabilityAt(id));
+                        setAt(id, ht, hc, hd);
                     }
                     break;
                 }
@@ -245,9 +294,10 @@ public class InventoryScreen {
             // Q drops one item off the hovered stack; Ctrl+Q the whole stack
             if (input.isKeyJustPressed(GLFW_KEY_Q) && typeAt(id) != null) {
                 BlockType t = typeAt(id);
+                int d = durabilityAt(id);
                 int n = ctrl ? countAt(id) : 1;
-                player.tossItem(t, n);
-                setAt(id, t, countAt(id) - n);
+                player.tossItem(t, n, d);
+                setAt(id, t, countAt(id) - n, d);
             }
         }
 
@@ -275,9 +325,10 @@ public class InventoryScreen {
                 }
             } else if (cursorType != null && outsidePanel(mx, my, w, h)) {
                 // Click into the open air: the whole stack is thrown out (MC)
-                player.tossItem(cursorType, cursorCount);
+                player.tossItem(cursorType, cursorCount, cursorDurability);
                 cursorType  = null;
                 cursorCount = 0;
+                cursorDurability = 0;
             }
         }
 
@@ -304,8 +355,8 @@ public class InventoryScreen {
                     lastRightDragSlot = id;
                 }
             } else if (cursorType != null && outsidePanel(mx, my, w, h)) {
-                player.tossItem(cursorType, 1); // right click into air throws one item
-                if (--cursorCount == 0) cursorType = null;
+                player.tossItem(cursorType, 1, cursorDurability); // right click into air throws one item
+                if (--cursorCount == 0) { cursorType = null; cursorDurability = 0; }
             }
         }
         if (rightDragging) {
@@ -329,15 +380,18 @@ public class InventoryScreen {
     /** Can the cursor stack (at least partly) drop into this slot? */
     private boolean canDropInto(int id) {
         BlockType t = typeAt(id);
-        return t == null || (t == cursorType && countAt(id) < Inventory.MAX_STACK);
+        return t == null || (t == cursorType && countAt(id) < Inventory.maxStackFor(cursorType));
     }
 
-    /** Double-click gather: pulls every matching stack onto the cursor (MC). */
+    /** Double-click gather: pulls every matching stack onto the cursor (MC).
+     *  Tools (maxStack 1) never have a partner to gather — the loop naturally
+     *  stops after the cursor's own single item. */
     private void collectAll() {
-        for (int id = 0; id < RESULT_ID && cursorCount < Inventory.MAX_STACK; id++) {
+        int maxStack = Inventory.maxStackFor(cursorType);
+        for (int id = 0; id < RESULT_ID && cursorCount < maxStack; id++) {
             if (id >= ARMOR_BASE && id < CRAFT_BASE) continue; // armor can't hold blocks
             if (typeAt(id) != cursorType) continue;
-            int take = Math.min(countAt(id), Inventory.MAX_STACK - cursorCount);
+            int take = Math.min(countAt(id), maxStack - cursorCount);
             setAt(id, cursorType, countAt(id) - take);
             cursorCount += take;
         }
@@ -345,22 +399,24 @@ public class InventoryScreen {
 
     /** Even split of the held stack across every dragged-over slot (MC left drag). */
     private void distribute() {
+        int maxStack = Inventory.maxStackFor(cursorType);
         int share = Math.max(1, cursorCount / dragSlots.size());
         for (int id : dragSlots) {
             if (cursorCount <= 0) break;
             BlockType t = typeAt(id);
             if (t != null && t != cursorType) continue;
-            int put = Math.min(Math.min(share, Inventory.MAX_STACK - countAt(id)), cursorCount);
+            int put = Math.min(Math.min(share, maxStack - countAt(id)), cursorCount);
             if (put <= 0) continue;
-            setAt(id, cursorType, countAt(id) + put);
+            setAt(id, cursorType, countAt(id) + put, cursorDurability);
             cursorCount -= put;
         }
-        if (cursorCount == 0) cursorType = null;
+        if (cursorCount == 0) { cursorType = null; cursorDurability = 0; }
     }
 
     // ---------- slot access by id ----------
 
     private BlockType typeAt(int id) {
+        if (id >= FURN_IN)            return furnace == null ? null : furnace.getType(id - FURN_IN);
         if (id < Inventory.MAIN_SIZE) return inventory.getType(id);
         if (id < CRAFT_BASE)          return inventory.getArmorType(id - ARMOR_BASE);
         if (id < RESULT_ID)           return inventory.getCraftType(id - CRAFT_BASE);
@@ -369,11 +425,25 @@ public class InventoryScreen {
     }
 
     private int countAt(int id) {
+        if (id >= FURN_IN)            return furnace == null ? 0 : furnace.getCount(id - FURN_IN);
         if (id < Inventory.MAIN_SIZE) return inventory.getCount(id);
         if (id < CRAFT_BASE)          return inventory.getArmorCount(id - ARMOR_BASE);
         if (id < RESULT_ID)           return inventory.getCraftCount(id - CRAFT_BASE);
         Recipes.Result r = currentResult();
         return r == null ? 0 : r.count();
+    }
+
+    /** Remaining tool uses for this slot (0 for anything that isn't a tool).
+     *  The result/output "slots" are virtual, so a would-be tool result reads
+     *  as freshly full until it's actually taken. */
+    private int durabilityAt(int id) {
+        if (id == RESULT_ID || id == FURN_OUT) {
+            BlockType t = typeAt(id);
+            return Tools.isTool(t) ? Tools.maxDurability(t) : 0;
+        }
+        if (id >= FURN_IN)            return 0; // furnace slots never hold tools
+        if (id < Inventory.MAIN_SIZE) return inventory.getDurability(id);
+        return 0; // armor/craft-grid slots never hold tools either
     }
 
     /** What the active craft grid currently makes (null = no recipe match). */
@@ -393,15 +463,24 @@ public class InventoryScreen {
     }
 
     private void setAt(int id, BlockType type, int count) {
-        if (id < Inventory.MAIN_SIZE)  inventory.set(id, type, count);
+        setAt(id, type, count, count > 0 ? Tools.maxDurability(type) : 0);
+    }
+
+    private void setAt(int id, BlockType type, int count, int durabilityValue) {
+        if (id >= FURN_IN) {
+            if (furnace != null) furnace.set(id - FURN_IN, type, count);
+        }
+        else if (id < Inventory.MAIN_SIZE)  inventory.set(id, type, count, durabilityValue);
         else if (id < CRAFT_BASE)      inventory.setArmor(id - ARMOR_BASE, type, count);
         else if (id < RESULT_ID)       inventory.setCraft(id - CRAFT_BASE, type, count);
         // result slot is read-only
     }
 
-    /** Blocks can't go in armor slots (MC rejects non-armor) or the result slot. */
+    /** Blocks can't go in armor slots (MC rejects non-armor), the result slot,
+     *  or the furnace output (smelted goods only come OUT of it). */
     private boolean acceptsPlacement(int id) {
-        return id < Inventory.MAIN_SIZE || (id >= CRAFT_BASE && id < RESULT_ID);
+        return id < Inventory.MAIN_SIZE || (id >= CRAFT_BASE && id < RESULT_ID)
+            || id == FURN_IN || id == FURN_FUEL;
     }
 
     // ---------- click rules (Minecraft's) ----------
@@ -413,27 +492,37 @@ public class InventoryScreen {
         }
         BlockType slotType  = typeAt(id);
         int       slotCount = countAt(id);
+        int       slotDur   = durabilityAt(id);
+        int       maxStack  = Inventory.maxStackFor(slotType != null ? slotType : cursorType);
 
         if (cursorType == null) {
             if (slotType == null) return;
             cursorType  = slotType;          // pick up the whole stack
             cursorCount = slotCount;
+            cursorDurability = slotDur;
             setAt(id, null, 0);
+        } else if (id == FURN_OUT && slotType == cursorType) {
+            // Clicking the output with a matching stack pulls it onto the cursor
+            int take = Math.min(slotCount, maxStack - cursorCount);
+            cursorCount += take;
+            setAt(id, slotType, slotCount - take);
         } else if (!acceptsPlacement(id)) {
-            return; // armor/result slot refuses the held stack
+            return; // armor/result/furnace-output slot refuses the held stack
         } else if (slotType == null) {
-            setAt(id, cursorType, cursorCount);   // place everything
+            setAt(id, cursorType, cursorCount, cursorDurability);   // place everything
             cursorType  = null;
             cursorCount = 0;
+            cursorDurability = 0;
         } else if (slotType == cursorType) {
-            int moved = Math.min(cursorCount, Inventory.MAX_STACK - slotCount);
-            setAt(id, slotType, slotCount + moved);
+            int moved = Math.min(cursorCount, maxStack - slotCount);
+            setAt(id, slotType, slotCount + moved, slotDur);
             cursorCount -= moved;
-            if (cursorCount == 0) cursorType = null;
+            if (cursorCount == 0) { cursorType = null; cursorDurability = 0; }
         } else {
-            setAt(id, cursorType, cursorCount);   // swap stacks
+            setAt(id, cursorType, cursorCount, cursorDurability);   // swap stacks
             cursorType  = slotType;
             cursorCount = slotCount;
+            cursorDurability = slotDur;
         }
     }
 
@@ -444,21 +533,24 @@ public class InventoryScreen {
         }
         BlockType slotType  = typeAt(id);
         int       slotCount = countAt(id);
+        int       slotDur   = durabilityAt(id);
+        int       maxStack  = Inventory.maxStackFor(slotType != null ? slotType : cursorType);
 
         if (cursorType == null) {
             if (slotType == null) return;
             int take = (slotCount + 1) / 2;       // MC takes the larger half
             cursorType  = slotType;
             cursorCount = take;
-            setAt(id, slotType, slotCount - take);
+            cursorDurability = slotDur;
+            setAt(id, slotType, slotCount - take, slotDur);
         } else if (!acceptsPlacement(id)) {
             return;
         } else if (slotType == null) {
-            setAt(id, cursorType, 1);             // place a single item
-            if (--cursorCount == 0) cursorType = null;
-        } else if (slotType == cursorType && slotCount < Inventory.MAX_STACK) {
-            setAt(id, slotType, slotCount + 1);
-            if (--cursorCount == 0) cursorType = null;
+            setAt(id, cursorType, 1, cursorDurability);             // place a single item
+            if (--cursorCount == 0) { cursorType = null; cursorDurability = 0; }
+        } else if (slotType == cursorType && slotCount < maxStack) {
+            setAt(id, slotType, slotCount + 1, slotDur);
+            if (--cursorCount == 0) { cursorType = null; cursorDurability = 0; }
         }
     }
 
@@ -469,7 +561,9 @@ public class InventoryScreen {
         if (cursorType == null) {
             cursorType  = r.type();
             cursorCount = r.count();
-        } else if (cursorType == r.type() && cursorCount + r.count() <= Inventory.MAX_STACK) {
+            cursorDurability = Tools.maxDurability(r.type()); // freshly made — full wear
+        } else if (cursorType == r.type()
+                && cursorCount + r.count() <= Inventory.maxStackFor(r.type())) {
             cursorCount += r.count();
         } else {
             return;
@@ -479,32 +573,91 @@ public class InventoryScreen {
 
     /** True when the whole stack could merge into the main inventory. */
     private boolean canFit(BlockType type, int count) {
+        int maxStack = Inventory.maxStackFor(type);
         int space = 0;
         for (int i = 0; i < Inventory.MAIN_SIZE && space < count; i++) {
             BlockType t = inventory.getType(i);
-            if (t == null) space += Inventory.MAX_STACK;
-            else if (t == type) space += Inventory.MAX_STACK - inventory.getCount(i);
+            if (t == null) space += maxStack;
+            else if (t == type) space += maxStack - inventory.getCount(i);
         }
         return space >= count;
+    }
+
+    /** First empty main-inventory slot, or -1 if the inventory is full. */
+    private int firstEmptyMainSlot() {
+        for (int i = 0; i < Inventory.MAIN_SIZE; i++) {
+            if (inventory.getType(i) == null) return i;
+        }
+        return -1;
     }
 
     /** Shift-click quick-move: hotbar ↔ storage; armor/craft → storage, then hotbar. */
     private void quickMove(int id) {
         if (id == RESULT_ID) {
             // Craft-all: keep crafting into the inventory until the recipe
-            // breaks or nothing more fits (MC's shift-click on the result)
+            // breaks or nothing more fits (MC's shift-click on the result).
+            // Non-stackable results (tools) craft one at a time, each into
+            // its own empty slot with full durability — they can't merge.
             for (int guard = 0; guard < 64; guard++) {
                 Recipes.Result r = currentResult();
-                if (r == null || !canFit(r.type(), r.count())) break;
-                int left = mergeIntoRange(r.type(), r.count(), 9, 35);
-                if (left > 0) mergeIntoRange(r.type(), left, 0, 8);
-                consumeCraftIngredients();
+                if (r == null) break;
+                if (Inventory.maxStackFor(r.type()) == 1) {
+                    int slot = firstEmptyMainSlot();
+                    if (slot < 0) break;
+                    inventory.set(slot, r.type(), 1, Tools.maxDurability(r.type()));
+                    consumeCraftIngredients();
+                } else {
+                    if (!canFit(r.type(), r.count())) break;
+                    int left = mergeIntoRange(r.type(), r.count(), 9, 35);
+                    if (left > 0) mergeIntoRange(r.type(), left, 0, 8);
+                    consumeCraftIngredients();
+                }
             }
             return;
         }
         BlockType type  = typeAt(id);
         int       count = countAt(id);
+        int       dur   = durabilityAt(id);
         if (type == null || count == 0) return;
+
+        // Furnace: shift-clicking from the inventory routes smeltables to the
+        // input and fuels to the fuel slot, like MC's smart quick-move
+        if (mode == Mode.FURNACE && id < Inventory.MAIN_SIZE) {
+            int target = Smelting.resultFor(type) != null ? FURN_IN
+                       : Smelting.isFuel(type)           ? FURN_FUEL : -1;
+            if (target >= 0) {
+                BlockType ft = typeAt(target);
+                if (ft == null) {
+                    int put = Math.min(count, Inventory.MAX_STACK);
+                    setAt(target, type, put);
+                    setAt(id, type, count - put);
+                    return;
+                } else if (ft == type && countAt(target) < Inventory.MAX_STACK) {
+                    int put = Math.min(count, Inventory.MAX_STACK - countAt(target));
+                    setAt(target, type, countAt(target) + put);
+                    setAt(id, type, count - put);
+                    return;
+                }
+                // target slot blocked by something else → fall through
+            }
+        }
+
+        // Tools never merge — shift-click just relocates the single item
+        // whole into the first empty slot on the other side.
+        if (Inventory.maxStackFor(type) == 1) {
+            int lo, hi;
+            if (id < Inventory.HOTBAR_SIZE)    { lo = 9; hi = 35; }
+            else if (id < Inventory.MAIN_SIZE) { lo = 0; hi = 8;  }
+            else                               { lo = 9; hi = 35; }
+            for (int i = lo; i <= hi; i++) {
+                if (inventory.getType(i) == null) {
+                    inventory.set(i, type, 1, dur);
+                    setAt(id, null, 0);
+                    return;
+                }
+            }
+            return; // no room — stays put, like MC
+        }
 
         int lo, hi;
         if (id < Inventory.HOTBAR_SIZE)       { lo = 9; hi = 35; }
@@ -521,16 +674,17 @@ public class InventoryScreen {
 
     /** Merges into main slots [lo..hi]: tops up stacks first, then fills empties. */
     private int mergeIntoRange(BlockType type, int count, int lo, int hi) {
+        int maxStack = Inventory.maxStackFor(type);
         for (int i = lo; i <= hi && count > 0; i++) {
-            if (inventory.getType(i) == type && inventory.getCount(i) < Inventory.MAX_STACK) {
-                int moved = Math.min(count, Inventory.MAX_STACK - inventory.getCount(i));
+            if (inventory.getType(i) == type && inventory.getCount(i) < maxStack) {
+                int moved = Math.min(count, maxStack - inventory.getCount(i));
                 inventory.set(i, type, inventory.getCount(i) + moved);
                 count -= moved;
             }
         }
         for (int i = lo; i <= hi && count > 0; i++) {
             if (inventory.getType(i) == null) {
-                int moved = Math.min(count, Inventory.MAX_STACK);
+                int moved = Math.min(count, maxStack);
                 inventory.set(i, type, moved);
                 count -= moved;
             }
@@ -581,6 +735,7 @@ public class InventoryScreen {
         ArrayList<int[]> labels = new ArrayList<>(); // {count, x, y}
         int vi = 0;
         int px = panelX(w), py = panelY(h);
+        ArrayList<int[]> durBars = new ArrayList<>(); // {slotX0, slotY1, cellWidth, durability, maxDurability}
         for (int[] d : defs()) {
             BlockType type = typeAt(d[0]);
             if (type == null) continue;
@@ -588,9 +743,18 @@ public class InventoryScreen {
             float cy = py + sc(d[2]) + CELL / 2f;
             float pop = d[0] < Inventory.MAIN_SIZE ? inventory.popScale(d[0]) : 1f;
             vi += appendBlockIcon(verts, idxs, vi, type, cx, cy, ICON_S * pop);
-            int count = countAt(d[0]);
-            if (count > 1) {
-                labels.add(new int[]{count, px + sc(d[1]) + CELL - 3, py + sc(d[2]) + CELL - 2});
+            if (Tools.isTool(type)) {
+                // MC shows the bar only once the tool has actually been used
+                int dur = durabilityAt(d[0]);
+                if (dur < Tools.maxDurability(type)) {
+                    durBars.add(new int[]{px + sc(d[1]) + 3, py + sc(d[2]) + CELL - 6, CELL - 6,
+                                           dur, Tools.maxDurability(type)});
+                }
+            } else {
+                int count = countAt(d[0]);
+                if (count > 1) {
+                    labels.add(new int[]{count, px + sc(d[1]) + CELL - 3, py + sc(d[2]) + CELL - 2});
+                }
             }
         }
         drawIconMesh(iconMesh, verts, idxs);
@@ -598,6 +762,7 @@ public class InventoryScreen {
             Label lab = countTexFor(l[0]);
             drawLabel(lab, l[1] - lab.w() * 2, l[2] - lab.h() * 2);
         }
+        for (int[] b : durBars) drawDurabilityBar(b[0], b[1], b[2], b[3], b[4]);
 
         if (mode == Mode.PLAYER) {
             // "Crafting" label centered over the 2x2 grid
@@ -616,10 +781,20 @@ public class InventoryScreen {
 
             // Player preview in its own little 3D viewport
             renderPlayerPreview(w, h, mx, my);
-        } else {
+        } else if (mode == Mode.TABLE) {
             // Crafting table GUI: label top-left, MC style
             drawTexture(craftingLabel, px + sc(28), py + sc(5),
                         craftingLabelW, craftingLabelH);
+        } else {
+            // Furnace GUI: label up top, fire gauge between input and fuel.
+            // The flame silhouette sits dim and fills bottom-up with the
+            // remaining burn of the current fuel, like MC's.
+            drawTexture(furnaceLabel, px + sc(60), py + sc(5),
+                        furnaceLabelW, furnaceLabelH);
+            int fx = px + sc(56), fy = py + sc(36), fs = sc(14);
+            drawTexture(flameDim, fx, fy, fs, fs);
+            float burn = furnace == null ? 0f : furnace.burnFraction();
+            if (burn > 0f) drawTexturePartialBottom(flameLit, fx, fy, fs, fs, burn);
         }
 
         // Held stack rides the cursor, drawn over everything
@@ -627,7 +802,11 @@ public class InventoryScreen {
             verts.clear(); idxs.clear();
             appendBlockIcon(verts, idxs, 0, cursorType, mx, my, ICON_S);
             drawIconMesh(cursorMesh, verts, idxs);
-            if (cursorCount > 1) {
+            if (Tools.isTool(cursorType)
+                    && cursorDurability < Tools.maxDurability(cursorType)) {
+                drawDurabilityBar((int) mx - CELL / 2 + 3, (int) my + CELL / 2 - 6, CELL - 6,
+                                   cursorDurability, Tools.maxDurability(cursorType));
+            } else if (cursorCount > 1) {
                 Label lab = countTexFor(cursorCount);
                 drawLabel(lab, (int) mx + CELL / 2 - 3 - lab.w() * 2,
                                (int) my + CELL / 2 - 2 - lab.h() * 2);
@@ -691,8 +870,8 @@ public class InventoryScreen {
             }
         }
 
-        // Crafting arrow: shaft + stepped head pointing at the result slot
-        {
+        // Arrow: shaft + stepped head pointing at the result/output slot
+        if (mode != Mode.FURNACE) {
             int cxa, cya;
             if (mode == Mode.PLAYER) { cxa = px + sc(136); cya = py + sc(33); }
             else                     { cxa = px + sc(90);  cya = py + sc(33); }
@@ -700,6 +879,25 @@ public class InventoryScreen {
             vi += rect(verts, idxs, vi, cxa + sc(9),  cya - sc(3), cxa + sc(11), cya + sc(8), 0.65f, 0.9f);
             vi += rect(verts, idxs, vi, cxa + sc(11), cya - sc(1), cxa + sc(13), cya + sc(6), 0.65f, 0.9f);
             vi += rect(verts, idxs, vi, cxa + sc(13), cya + sc(1), cxa + sc(14), cya + sc(4), 0.65f, 0.9f);
+        } else {
+            // Furnace: dim arrow always, bright fill sweeping left→right with
+            // smelt progress (MC's white progress arrow)
+            int cxa = px + sc(88), cya = py + sc(40);
+            int[][] ar = {{0, 0, 9, 5}, {9, -3, 11, 8}, {11, -1, 13, 6}, {13, 1, 14, 4}};
+            for (int[] a : ar) {
+                vi += rect(verts, idxs, vi, cxa + sc(a[0]), cya + sc(a[1]),
+                           cxa + sc(a[2]), cya + sc(a[3]), 0.30f, 0.9f);
+            }
+            float frac = furnace == null ? 0f : furnace.cookFraction();
+            if (frac > 0f) {
+                int bound = cxa + Math.round(14 * frac * S);
+                for (int[] a : ar) {
+                    int x0 = cxa + sc(a[0]), x1 = Math.min(cxa + sc(a[2]), bound);
+                    if (x1 <= x0) continue;
+                    vi += rect(verts, idxs, vi, x0, cya + sc(a[1]), x1, cya + sc(a[3]),
+                               0.95f, 0.95f);
+                }
+            }
         }
 
         float[] va = new float[verts.size()];
@@ -836,6 +1034,75 @@ public class InventoryScreen {
         iconShader.detach();
     }
 
+    /** 14x14 pixel-art flame for the furnace gauge ('.'=empty, others by band). */
+    private static final String[] FLAME_ROWS = {
+        "..............",
+        ".....X....X...",
+        "....XX....X...",
+        "....XXX..XX...",
+        "...XXXX..XX...",
+        "...XXXXX.XXX..",
+        "..XXXXXX.XXX..",
+        "..XXXXXXXXXX..",
+        ".XXXXXXXXXXX..",
+        ".XXXXXXXXXXXX.",
+        ".XXXXXXXXXXXX.",
+        "..XXXXXXXXXX..",
+        "..XXXXXXXXXX..",
+        "...XXXXXXXX...",
+    };
+
+    /** The fire gauge sprite: yellow-tipped orange flame, or its dim unlit ghost. */
+    private static Texture makeFlame(boolean lit) {
+        int n = FLAME_ROWS.length;
+        BufferedImage img = new BufferedImage(n, n, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < n; y++) {
+            for (int x = 0; x < n; x++) {
+                if (FLAME_ROWS[y].charAt(x) == '.') continue;
+                int argb;
+                if (!lit)        argb = 0x66FFFFFF;          // faint ghost outline
+                else if (y < 5)  argb = 0xFFFFDD4A;          // yellow tips
+                else if (y < 9)  argb = 0xFFFF9A1E;          // orange body
+                else             argb = 0xFFE25822;          // deep orange base
+                img.setRGB(x, y, argb);
+            }
+        }
+        ByteBuffer buf = MemoryUtil.memAlloc(n * n * 4);
+        for (int y = 0; y < n; y++) {
+            int srcY = n - 1 - y; // flip for GL, same convention as makeText
+            for (int x = 0; x < n; x++) {
+                int argb = img.getRGB(x, srcY);
+                buf.put((byte) ((argb >> 16) & 0xFF));
+                buf.put((byte) ((argb >>  8) & 0xFF));
+                buf.put((byte) ( argb        & 0xFF));
+                buf.put((byte) ((argb >> 24) & 0xFF));
+            }
+        }
+        buf.flip();
+        Texture t = new Texture(buf, n, n);
+        MemoryUtil.memFree(buf);
+        return t;
+    }
+
+    /** Draws only the bottom {@code frac} of a texture (the flame filling up). */
+    private void drawTexturePartialBottom(Texture tex, int x, int y, int tw, int th, float frac) {
+        frac = Math.max(0f, Math.min(1f, frac));
+        if (frac <= 0f) return;
+        float ys = y + th * (1f - frac);
+        iconShader.use();
+        iconShader.setUniform("uProjection", projection);
+        iconShader.setUniform("uTexture", 0);
+        tex.bind(0);
+        labelMesh.upload(new float[]{
+            x,      ys,     0, 0, frac, 1,
+            x + tw, ys,     0, 1, frac, 1,
+            x + tw, y + th, 0, 1, 0,    1,
+            x,      y + th, 0, 0, 0,    1,
+        }, new int[]{0, 1, 2, 2, 3, 0});
+        labelMesh.render();
+        iconShader.detach();
+    }
+
     private static Texture solidTexture(int r, int g, int b) {
         ByteBuffer buf = MemoryUtil.memAlloc(4);
         buf.put((byte) r).put((byte) g).put((byte) b).put((byte) 0xFF);
@@ -847,18 +1114,19 @@ public class InventoryScreen {
 
     // ---------- text / labels (same approach as the hotbar) ----------
 
-    /** Hover tooltip: item name on a dark rounded-off box next to the cursor. */
+    /** Hover tooltip: the item name on a dark rounded-off box next to the
+     *  cursor. Tool wear is the bar's job — no durability text, like MC. */
     private void renderTooltip(BlockType type, int mx, int my, int w) {
         Label lab = nameTex.computeIfAbsent(type, t -> {
             int[] wh = new int[2];
             return new Label(makeText(prettyName(t), 12, 1, wh), wh[0], wh[1]);
         });
-        int tw = lab.w() * 2, th = lab.h() * 2;
-        int x = mx + 18, y = my - th - 10;
-        if (x + tw + 12 > w) x = w - tw - 12; // keep it on screen
+        int boxW = lab.w() * 2, boxH = lab.h() * 2;
+        int x = mx + 18, y = my - boxH - 10;
+        if (x + boxW + 12 > w) x = w - boxW - 12; // keep it on screen
         if (y < 4) y = my + 24;
-        drawSolid(x - 8, y - 5, x + tw + 8, y + th + 5, 0.00f, 0.90f);
-        drawSolid(x - 6, y - 3, x + tw + 6, y + th + 3, 0.08f, 0.95f);
+        drawSolid(x - 8, y - 5, x + boxW + 8, y + boxH + 5, 0.00f, 0.90f);
+        drawSolid(x - 6, y - 3, x + boxW + 6, y + boxH + 3, 0.08f, 0.95f);
         drawLabel(lab, x, y);
     }
 
@@ -884,6 +1152,36 @@ public class InventoryScreen {
             x1, y0, 0, alpha, 0, brightness,
             x1, y1, 0, alpha, 0, brightness,
             x0, y1, 0, alpha, 0, brightness,
+        }, new int[]{0, 1, 2, 2, 3, 0});
+        labelMesh.render();
+        shader.detach();
+    }
+
+    /** MC-style durability bar: dark track + green→yellow→red fill, drawn
+     *  along the bottom of an icon cell (or trailing the cursor). */
+    private void drawDurabilityBar(int x0, int y1, int width, int durability, int maxDurability) {
+        int barH = Math.max(2, sc(1));
+        int y0 = y1 - barH;
+        drawColoredRect(x0, y0, x0 + width, y1, durBarBg);
+        if (maxDurability <= 0) return;
+        float frac = Math.max(0f, Math.min(1f, durability / (float) maxDurability));
+        int fillW = Math.round(width * frac);
+        if (fillW <= 0) return;
+        Texture fill = frac > 0.6f ? durBarGreen : frac > 0.25f ? durBarYellow : durBarRed;
+        drawColoredRect(x0, y0, x0 + fillW, y1, fill);
+    }
+
+    /** One opaque solid-colour quad using an arbitrary 1x1 swatch texture. */
+    private void drawColoredRect(int x0, int y0, int x1, int y1, Texture tex) {
+        shader.use();
+        shader.setUniform("uProjection", projection);
+        shader.setUniform("uTexture", 0);
+        tex.bind(0);
+        labelMesh.upload(new float[]{
+            x0, y0, 0, 1f, 0, 1f,
+            x1, y0, 0, 1f, 0, 1f,
+            x1, y1, 0, 1f, 0, 1f,
+            x0, y1, 0, 1f, 0, 1f,
         }, new int[]{0, 1, 2, 2, 3, 0});
         labelMesh.render();
         shader.detach();
@@ -987,7 +1285,14 @@ public class InventoryScreen {
         whiteTexture.cleanup();
         skinTexture.cleanup();
         for (Texture t : armorIcons) t.cleanup();
+        durBarBg.cleanup();
+        durBarGreen.cleanup();
+        durBarYellow.cleanup();
+        durBarRed.cleanup();
         craftingLabel.cleanup();
+        furnaceLabel.cleanup();
+        flameLit.cleanup();
+        flameDim.cleanup();
         panelMesh.cleanup();
         iconMesh.cleanup();
         cursorMesh.cleanup();

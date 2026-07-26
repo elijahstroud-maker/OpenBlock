@@ -64,6 +64,23 @@ public class ChunkMesher {
     private float[] waterVertBuf = new float[32768];
     private int[]   waterIdxBuf  = new int  [16384];
 
+    /** X-ray debug mode (/admin xray): natural blocks mesh as air, ores stay. */
+    public static volatile boolean xray = false;
+
+    /** Natural filler blocks that vanish in x-ray. Ores, trees, cacti, and
+     *  player-crafted blocks stay visible so the world keeps some shape. */
+    private static boolean xrayHidden(BlockType b) {
+        return switch (b) {
+            case GRASS, SNOW_GRASS, DIRT, STONE, SAND, GRAVEL, BEDROCK,
+                 WATER, WATER_FLOWING -> true;
+            default -> false;
+        };
+    }
+
+    private static BlockType filtered(BlockType b) {
+        return (xray && xrayHidden(b)) ? BlockType.AIR : b;
+    }
+
     public MeshData build(Chunk chunk, World world, TextureAtlas atlas) {
         int vp = 0, ip = 0, vertexBase = 0;
         int wvp = 0, wip = 0, waterVertexBase = 0;
@@ -74,7 +91,7 @@ public class ChunkMesher {
         for (int lx = 0; lx < Chunk.SIZE_X; lx++) {
             for (int ly = 0; ly <= yMax; ly++) {
                 for (int lz = 0; lz < Chunk.SIZE_Z; lz++) {
-                    BlockType block = chunk.getBlock(lx, ly, lz);
+                    BlockType block = filtered(chunk.getBlock(lx, ly, lz));
                     if (block == BlockType.AIR) continue;
 
                     boolean isWater = (block == BlockType.WATER || block == BlockType.WATER_FLOWING);
@@ -100,10 +117,10 @@ public class ChunkMesher {
                         int nz = chunk.getWorldZ() + nlz;
                         // In-chunk neighbors read the chunk directly — skips the
                         // floorDiv + chunk-map lookup that world.getBlock does.
-                        BlockType neighbor =
+                        BlockType neighbor = filtered(
                             (nlx >= 0 && nlx < Chunk.SIZE_X && nlz >= 0 && nlz < Chunk.SIZE_Z)
                                 ? chunk.getBlock(nlx, nly, nlz)
-                                : world.getBlock(nx, ny, nz);
+                                : world.getBlock(nx, ny, nz));
 
                         float gapBottom = 0.0f; // for gap-fill faces: y of the lower neighbour's top
                         boolean neighborWater = (neighbor == BlockType.WATER || neighbor == BlockType.WATER_FLOWING);
@@ -139,6 +156,9 @@ public class ChunkMesher {
                         } else {
                             // Solid faces render against any non-opaque neighbor (AIR, LEAVES, WATER)
                             if (neighbor.opaque) continue;
+                            // Glass culls against glass — panes fused into a sheet
+                            // show no internal edges, like MC
+                            if (block == BlockType.GLASS && neighbor == BlockType.GLASS) continue;
                         }
 
                         float[] uv = atlas.getUV(block, FACES[fi]);
